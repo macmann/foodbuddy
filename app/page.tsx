@@ -35,6 +35,16 @@ export default function HomePage() {
   const [locationText, setLocationText] = useState("");
   const [locationError, setLocationError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [feedbackOptions, setFeedbackOptions] = useState<RecommendationCardData[]>([]);
+  const [feedbackPromptVisible, setFeedbackPromptVisible] = useState(false);
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const [feedbackSuccess, setFeedbackSuccess] = useState<string | null>(null);
+  const [selectedPlaceId, setSelectedPlaceId] = useState("");
+  const [rating, setRating] = useState(0);
+  const [commentText, setCommentText] = useState("");
+  const [tagText, setTagText] = useState("");
+  const [lastActivityAt, setLastActivityAt] = useState<number | null>(null);
 
   const anonId = useMemo(() => {
     if (typeof window === "undefined") {
@@ -57,6 +67,30 @@ export default function HomePage() {
     }
     setLocationError(null);
   }, [location]);
+
+  useEffect(() => {
+    if (feedbackPromptVisible || feedbackSubmitted || feedbackOptions.length === 0) {
+      return;
+    }
+
+    const lastActivity = lastActivityAt ?? Date.now();
+    const remainingMs = Math.max(0, 10 * 60 * 1000 - (Date.now() - lastActivity));
+
+    if (remainingMs === 0) {
+      setFeedbackPromptVisible(true);
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setFeedbackPromptVisible(true);
+    }, remainingMs);
+
+    return () => window.clearTimeout(timeout);
+  }, [feedbackOptions, feedbackPromptVisible, feedbackSubmitted, lastActivityAt]);
+
+  const noteActivity = () => {
+    setLastActivityAt(Date.now());
+  };
 
   const handleShareLocation = () => {
     if (!navigator.geolocation) {
@@ -81,6 +115,8 @@ export default function HomePage() {
     if (!input.trim() || loading) {
       return;
     }
+
+    noteActivity();
 
     const userMessage: ChatMessage = {
       id: createId(),
@@ -114,6 +150,22 @@ export default function HomePage() {
         (item): item is RecommendationCardData => Boolean(item),
       );
 
+      if (recommendations.length > 0) {
+        setFeedbackOptions(recommendations);
+        setSelectedPlaceId(recommendations[0].placeId);
+        setFeedbackPromptVisible(false);
+        setFeedbackSubmitted(false);
+        setFeedbackError(null);
+        setFeedbackSuccess(null);
+        setRating(0);
+        setCommentText("");
+        setTagText("");
+        setLastActivityAt(Date.now());
+      } else {
+        setFeedbackOptions([]);
+        setFeedbackPromptVisible(false);
+      }
+
       const assistantMessage: ChatMessage = {
         id: createId(),
         role: "assistant",
@@ -131,6 +183,45 @@ export default function HomePage() {
       setMessages((prev) => [...prev, assistantMessage]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleFeedbackSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selectedPlaceId || rating === 0) {
+      setFeedbackError("Please select a place and rating.");
+      return;
+    }
+
+    try {
+      setFeedbackError(null);
+      const tags = tagText
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter(Boolean);
+
+      const response = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          anonId,
+          channel: "WEB",
+          placeId: selectedPlaceId,
+          rating,
+          commentText: commentText.trim() || undefined,
+          tags: tags.length > 0 ? tags : undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Feedback failed");
+      }
+
+      setFeedbackSubmitted(true);
+      setFeedbackPromptVisible(false);
+      setFeedbackSuccess("Thanks for sharing your feedback!");
+    } catch (error) {
+      setFeedbackError("Sorry, we couldn't save your feedback. Please try again.");
     }
   };
 
@@ -225,7 +316,10 @@ export default function HomePage() {
       <form onSubmit={handleSubmit} style={{ display: "flex", gap: "0.5rem" }}>
         <input
           value={input}
-          onChange={(event) => setInput(event.target.value)}
+          onChange={(event) => {
+            setInput(event.target.value);
+            noteActivity();
+          }}
           placeholder="Try 'open sushi nearby'"
           style={{ flex: 1, padding: "0.6rem", borderRadius: 6, border: "1px solid #ddd" }}
         />
@@ -237,6 +331,88 @@ export default function HomePage() {
           {loading ? "Sending..." : "Send"}
         </button>
       </form>
+
+      {feedbackPromptVisible && feedbackOptions.length > 0 && !feedbackSubmitted && (
+        <section
+          style={{
+            marginTop: "2rem",
+            padding: "1rem",
+            borderRadius: 10,
+            border: "1px solid #e6e6e6",
+            background: "#fafafa",
+          }}
+        >
+          <h2 style={{ marginTop: 0 }}>Did you try any? Rate 1–5</h2>
+          <p style={{ color: "#555" }}>Share feedback to help the community.</p>
+          <form onSubmit={handleFeedbackSubmit} style={{ display: "grid", gap: "0.75rem" }}>
+            <label style={{ display: "grid", gap: "0.35rem" }}>
+              Place tried
+              <select
+                value={selectedPlaceId}
+                onChange={(event) => setSelectedPlaceId(event.target.value)}
+                style={{ padding: "0.5rem", borderRadius: 6, border: "1px solid #ddd" }}
+              >
+                {feedbackOptions.map((option) => (
+                  <option key={option.placeId} value={option.placeId}>
+                    {option.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div style={{ display: "grid", gap: "0.35rem" }}>
+              <span>Rating</span>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                {[1, 2, 3, 4, 5].map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setRating(value)}
+                    style={{
+                      padding: "0.4rem 0.75rem",
+                      borderRadius: 999,
+                      border: "1px solid #ddd",
+                      background: rating === value ? "#0a5" : "#fff",
+                      color: rating === value ? "#fff" : "#222",
+                    }}
+                  >
+                    {value}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label style={{ display: "grid", gap: "0.35rem" }}>
+              Optional comment
+              <textarea
+                value={commentText}
+                onChange={(event) => setCommentText(event.target.value)}
+                rows={3}
+                style={{ padding: "0.5rem", borderRadius: 6, border: "1px solid #ddd" }}
+                placeholder="Tell us what you liked"
+              />
+            </label>
+            <label style={{ display: "grid", gap: "0.35rem" }}>
+              Optional tags (comma separated)
+              <input
+                value={tagText}
+                onChange={(event) => setTagText(event.target.value)}
+                placeholder="cozy, quick bite, family"
+                style={{ padding: "0.5rem", borderRadius: 6, border: "1px solid #ddd" }}
+              />
+            </label>
+            {feedbackError && <div style={{ color: "#b00" }}>{feedbackError}</div>}
+            <button
+              type="submit"
+              style={{ padding: "0.6rem 1rem", borderRadius: 6, border: "1px solid #ddd" }}
+            >
+              Submit feedback
+            </button>
+          </form>
+        </section>
+      )}
+
+      {feedbackSuccess && (
+        <div style={{ marginTop: "1rem", color: "#0a5" }}>{feedbackSuccess}</div>
+      )}
     </main>
   );
 }

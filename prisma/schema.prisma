@@ -75,3 +75,17 @@ model PlaceAggregate {
   lastUpdatedAt         DateTime?
   place                 Place    @relation(fields: [placeId], references: [placeId], onDelete: Cascade)
 }
+
+model ChatState {
+  telegramChatIdHash String   @id
+  lastLat            Float
+  lastLng            Float
+  updatedAt          DateTime @updatedAt
+}
+
+model RagDocument {
+  placeId   String   @id
+  content   String
+  embedding Unsupported("vector")
+  updatedAt DateTime @updatedAt
+}

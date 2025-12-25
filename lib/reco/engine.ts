@@ -10,6 +10,7 @@ import {
   ratingScore,
   reviewConfidence,
 } from "./scoring";
+import { getRagEnrichmentForPlaces, upsertRagDocForPlace } from "../rag";
 
 type RecommendationInput = {
   channel: "WEB" | "TELEGRAM" | "VIBER" | "MESSENGER";
@@ -87,6 +88,10 @@ export const recommend = async (
   });
   const aggregateMap = new Map(aggregates.map((item) => [item.placeId, item]));
 
+  await Promise.allSettled(
+    mergedResults.map((place) => upsertRagDocForPlace(place.placeId)),
+  );
+
   const scored = mergedResults
     .map((place) => {
       const distanceMeters = haversineMeters(input.location, {
@@ -115,11 +120,20 @@ export const recommend = async (
     })
     .sort((a, b) => b.score - a.score);
 
-  const results = scored.map((entry) => ({
-    place: entry.place,
-    score: entry.score,
-    explanation: buildExplanation(entry.place, entry.distanceMeters, entry.communityScore),
-  }));
+  const enrichment = await getRagEnrichmentForPlaces(
+    scored.map((entry) => entry.place.placeId),
+    input.queryText,
+  );
+
+  const results = scored.map((entry) => {
+    const base = buildExplanation(entry.place, entry.distanceMeters, entry.communityScore);
+    const mention = enrichment.get(entry.place.placeId);
+    return {
+      place: entry.place,
+      score: entry.score,
+      explanation: mention ? `${base} ${mention}` : base,
+    };
+  });
 
   const [primary, ...alternatives] = results;
 

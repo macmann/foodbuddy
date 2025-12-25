@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { hashUserId } from "../../../lib/hash";
 import { getPlacesProvider } from "../../../lib/places";
+import { logger } from "../../../lib/logger";
+import { createRequestContext } from "../../../lib/request";
+import { rateLimit } from "../../../lib/rateLimit";
 import { recommend } from "../../../lib/reco/engine";
 import { haversineMeters } from "../../../lib/reco/scoring";
 
@@ -27,6 +30,16 @@ const buildRecommendationPayload = (
 };
 
 export async function POST(request: Request) {
+  const { requestId, startTime } = createRequestContext(request);
+  const channel = "WEB";
+  const logContext = { requestId, channel };
+  const respond = (status: number, payload: Record<string, unknown>) => {
+    const response = NextResponse.json(payload, { status });
+    response.headers.set("x-request-id", requestId);
+    logger.info({ ...logContext, latencyMs: Date.now() - startTime }, "chat request complete");
+    return response;
+  };
+
   const body = (await request.json()) as {
     anonId: string;
     sessionId: string;
@@ -36,19 +49,33 @@ export async function POST(request: Request) {
   };
 
   if (!body?.anonId || !body?.sessionId || !body?.message) {
-    return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+    return respond(400, { error: "Invalid request" });
+  }
+
+  if (body.message.length > 500) {
+    return respond(400, { error: "Message too long" });
   }
 
   const provider = getPlacesProvider();
   const userIdHash = hashUserId(body.anonId);
   let location = body.location ?? null;
 
+  const limiter = rateLimit(`chat:${userIdHash}`, 10, 60_000);
+  if (!limiter.allowed) {
+    const response = respond(429, { error: "Rate limit exceeded" });
+    response.headers.set(
+      "Retry-After",
+      Math.ceil((limiter.resetAt - Date.now()) / 1000).toString(),
+    );
+    return response;
+  }
+
   if (!location && body.locationText) {
     location = await provider.geocode(body.locationText);
   }
 
   if (!location) {
-    return NextResponse.json({ error: "Location is required" }, { status: 400 });
+    return respond(400, { error: "Location is required" });
   }
 
   const recommendation = await recommend({
@@ -65,7 +92,7 @@ export async function POST(request: Request) {
     ? "Here are a few spots you might like."
     : "Sorry, I couldn't find any places for that query.";
 
-  return NextResponse.json({
+  return respond(200, {
     primary: primary ?? null,
     alternatives,
     message,
