@@ -1,20 +1,36 @@
 {
-  "name": "nodejs-starter",
-  "version": "1.0.0",
-  "description": "Typical Node.js project structure",
-  "main": "src/index.js",
+  "name": "foodbuddy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:studio": "prisma studio"
   },
   "dependencies": {
-    "@prisma/client": "^5.22.0",
-    "express": "^4.19.2",
+    "@prisma/client": "^5.17.0",
+    "jose": "^5.6.3",
+    "next": "15.0.0",
     "pino": "^9.4.0",
-    "zod": "^3.24.1"
+    "prisma": "^5.17.0",
+    "rate-limiter-flexible": "^5.0.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
-    "nodemon": "^3.1.0",
-    "prisma": "^5.22.0"
+    "@types/node": "^20.14.10",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "eslint": "^9.6.0",
+    "eslint-config-next": "15.0.0",
+    "prettier": "^3.3.2",
+    "typescript": "^5.5.3"
   }
 }
