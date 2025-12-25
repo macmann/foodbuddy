@@ -1,8 +1,22 @@
-<<<<<<< HEAD
-# Node.js Starter Project
+# FoodBuddy
 
-Basic Express.js project structure.
-=======
-# foodbuddy
-Foodbuddy is a Food Place Recommendation Platform Using GenAI Capability
->>>>>>> a98bba1bea867a423804f6f1eb85b4cb44a72975
+FoodBuddy is a Next.js 15+ (App Router) starter for a food recommendation platform.
+
+## Getting Started
+
+```bash
+npm install
+npm run dev
+```
+
+## Database
+
+```bash
+npm run db:generate
+npm run db:migrate
+```
+
+## Environment
+
+Copy `.env.example` to `.env` and update the values as needed. Feature flags allow the app to
+start without Telegram or RAG configured.
