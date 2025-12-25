@@ -1,0 +1,77 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Channel {
+  WEB
+  TELEGRAM
+  VIBER
+  MESSENGER
+}
+
+enum ModerationStatus {
+  ACTIVE
+  HIDDEN
+}
+
+model Place {
+  placeId            String             @id
+  name               String
+  address            String?
+  lat                Float
+  lng                Float
+  googleRating       Float?
+  googleRatingsTotal Int?
+  priceLevel         Int?
+  types              Json?
+  mapsUrl            String?
+  lastFetchedAt      DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  feedback           PlaceFeedback[]
+  aggregate          PlaceAggregate?
+
+  @@index([lat, lng])
+}
+
+model RecommendationEvent {
+  id                  String   @id @default(cuid())
+  channel             Channel
+  userIdHash          String
+  userLat             Float?
+  userLng             Float?
+  queryText           String
+  recommendedPlaceIds Json
+  createdAt           DateTime @default(now())
+
+  @@index([userIdHash, createdAt])
+}
+
+model PlaceFeedback {
+  id                String            @id @default(cuid())
+  placeId           String
+  channel           Channel
+  userIdHash        String
+  rating            Int
+  commentText       String?
+  tags              Json?
+  moderationStatus  ModerationStatus  @default(ACTIVE)
+  createdAt         DateTime          @default(now())
+  place             Place             @relation(fields: [placeId], references: [placeId], onDelete: Cascade)
+
+  @@index([placeId, createdAt])
+}
+
+model PlaceAggregate {
+  placeId               String   @id
+  communityRatingAvg    Float    @default(0)
+  communityRatingCount  Int      @default(0)
+  tagCounts             Json     @default("{}")
+  lastUpdatedAt         DateTime?
+  place                 Place    @relation(fields: [placeId], references: [placeId], onDelete: Cascade)
+}
