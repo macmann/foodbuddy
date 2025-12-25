@@ -1,23 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-type ChatMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
+import Composer from "../components/Composer";
+import FeedbackCard from "../components/FeedbackCard";
+import LocationGate from "../components/LocationGate";
+import MessageBubble, { type MessageBubbleData } from "../components/MessageBubble";
+import RecommendationCard from "../components/RecommendationCard";
+import type { RecommendationCardData } from "../lib/types";
+
+type ChatMessage = MessageBubbleData & {
   recommendations?: RecommendationCardData[];
-};
-
-type RecommendationCardData = {
-  placeId: string;
-  name: string;
-  rating?: number;
-  distanceMeters?: number;
-  openNow?: boolean;
-  address?: string;
-  mapsUrl?: string;
-  rationale?: string;
 };
 
 type ChatResponse = {
@@ -28,10 +21,20 @@ type ChatResponse = {
 
 const createId = () => crypto.randomUUID();
 
+const PLACEHOLDER_OPTIONS = [
+  "Any good food around here?",
+  "Cheap noodles within 1km",
+  "Best café for working",
+];
+
+const getRandomPlaceholder = () =>
+  PLACEHOLDER_OPTIONS[Math.floor(Math.random() * PLACEHOLDER_OPTIONS.length)];
+
 export default function HomePage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [manualLocationInput, setManualLocationInput] = useState("");
   const [locationText, setLocationText] = useState("");
   const [locationError, setLocationError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -43,8 +46,12 @@ export default function HomePage() {
   const [selectedPlaceId, setSelectedPlaceId] = useState("");
   const [rating, setRating] = useState(0);
   const [commentText, setCommentText] = useState("");
-  const [tagText, setTagText] = useState("");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [lastActivityAt, setLastActivityAt] = useState<number | null>(null);
+  const [composerPlaceholder] = useState(getRandomPlaceholder);
+
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScrollRef = useRef(true);
 
   const anonId = useMemo(() => {
     if (typeof window === "undefined") {
@@ -60,6 +67,7 @@ export default function HomePage() {
   }, []);
 
   const sessionId = useMemo(() => createId(), []);
+  const locationReady = Boolean(location || locationText.trim());
 
   useEffect(() => {
     if (!location) {
@@ -88,6 +96,14 @@ export default function HomePage() {
     return () => window.clearTimeout(timeout);
   }, [feedbackOptions, feedbackPromptVisible, feedbackSubmitted, lastActivityAt]);
 
+  useEffect(() => {
+    const container = chatContainerRef.current;
+    if (!container || !shouldAutoScrollRef.current) {
+      return;
+    }
+    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+  }, [messages, feedbackPromptVisible, feedbackSuccess, loading]);
+
   const noteActivity = () => {
     setLastActivityAt(Date.now());
   };
@@ -102,6 +118,7 @@ export default function HomePage() {
       (pos) => {
         setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
         setLocationText("");
+        setManualLocationInput("");
       },
       () => {
         setLocation(null);
@@ -110,9 +127,24 @@ export default function HomePage() {
     );
   };
 
-  const handleSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!input.trim() || loading) {
+  const handleSetManualLocation = () => {
+    const trimmed = manualLocationInput.trim();
+    if (!trimmed) {
+      setLocationError("Please enter a neighborhood or landmark.");
+      return;
+    }
+    setLocationText(trimmed);
+    setLocation(null);
+    setLocationError(null);
+  };
+
+  const sendMessage = async (messageText: string, addUserMessage = true) => {
+    if (!messageText.trim() || loading) {
+      return;
+    }
+
+    if (!locationReady) {
+      setLocationError("Please set a location before asking for recommendations.");
       return;
     }
 
@@ -121,11 +153,15 @@ export default function HomePage() {
     const userMessage: ChatMessage = {
       id: createId(),
       role: "user",
-      content: input.trim(),
+      content: messageText.trim(),
+      createdAt: Date.now(),
     };
 
-    setMessages((prev) => [...prev, userMessage]);
-    setInput("");
+    if (addUserMessage) {
+      setMessages((prev) => [...prev, userMessage]);
+      setInput("");
+    }
+
     setLoading(true);
 
     try {
@@ -159,7 +195,7 @@ export default function HomePage() {
         setFeedbackSuccess(null);
         setRating(0);
         setCommentText("");
-        setTagText("");
+        setSelectedTags([]);
         setLastActivityAt(Date.now());
       } else {
         setFeedbackOptions([]);
@@ -171,6 +207,7 @@ export default function HomePage() {
         role: "assistant",
         content: data.message,
         recommendations,
+        createdAt: Date.now(),
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -178,7 +215,10 @@ export default function HomePage() {
       const assistantMessage: ChatMessage = {
         id: createId(),
         role: "assistant",
-        content: "Sorry, something went wrong. Please try again.",
+        content: "Sorry, something went wrong while fetching places.",
+        createdAt: Date.now(),
+        error: true,
+        retryContent: messageText,
       };
       setMessages((prev) => [...prev, assistantMessage]);
     } finally {
@@ -186,8 +226,19 @@ export default function HomePage() {
     }
   };
 
-  const handleFeedbackSubmit = async (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
+    await sendMessage(input);
+  };
+
+  const handleRetry = (message: MessageBubbleData) => {
+    if (!message.retryContent) {
+      return;
+    }
+    sendMessage(message.retryContent, false);
+  };
+
+  const handleFeedbackSubmit = async () => {
     if (!selectedPlaceId || rating === 0) {
       setFeedbackError("Please select a place and rating.");
       return;
@@ -195,10 +246,6 @@ export default function HomePage() {
 
     try {
       setFeedbackError(null);
-      const tags = tagText
-        .split(",")
-        .map((tag) => tag.trim())
-        .filter(Boolean);
 
       const response = await fetch("/api/feedback", {
         method: "POST",
@@ -209,7 +256,7 @@ export default function HomePage() {
           placeId: selectedPlaceId,
           rating,
           commentText: commentText.trim() || undefined,
-          tags: tags.length > 0 ? tags : undefined,
+          tags: selectedTags.length > 0 ? selectedTags : undefined,
         }),
       });
 
@@ -225,194 +272,165 @@ export default function HomePage() {
     }
   };
 
+  const handleToggleTag = (tag: string) => {
+    setSelectedTags((prev) =>
+      prev.includes(tag) ? prev.filter((item) => item !== tag) : [...prev, tag],
+    );
+  };
+
+  const handleRateFromCard = (placeId: string) => {
+    setSelectedPlaceId(placeId);
+    setFeedbackPromptVisible(true);
+    setFeedbackSubmitted(false);
+    setFeedbackSuccess(null);
+  };
+
+  const handleShowMore = () => {
+    sendMessage("show more options");
+  };
+
+  const handleScroll = () => {
+    const container = chatContainerRef.current;
+    if (!container) {
+      return;
+    }
+    const distanceToBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    shouldAutoScrollRef.current = distanceToBottom < 120;
+  };
+
+  const canSend = locationReady && input.trim().length > 0 && !loading;
+
   return (
-    <main style={{ maxWidth: 720, margin: "0 auto", padding: "2rem 1.5rem" }}>
-      <h1 style={{ fontSize: "1.75rem", marginBottom: "0.5rem" }}>FoodBuddy</h1>
-      <p style={{ marginBottom: "1.5rem", color: "#444" }}>
-        Ask for nearby food spots and get instant recommendations.
-      </p>
+    <main className="min-h-screen bg-slate-50">
+      <div className="mx-auto flex min-h-screen max-w-3xl flex-col px-4 py-6 sm:px-6">
+        <header className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 shadow-sm backdrop-blur">
+          <div>
+            <h1 className="text-lg font-bold text-slate-900">FoodBuddy</h1>
+            <p className="text-xs text-slate-500">Smart local food picks in seconds.</p>
+          </div>
+          <div className="flex items-center gap-2 text-xs">
+            <span
+              className={`rounded-full px-3 py-1 font-semibold ${
+                locationReady ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
+              }`}
+            >
+              Location: {locationReady ? "On" : "Off"}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setLocation(null);
+                setLocationText("");
+                setManualLocationInput("");
+                setLocationError(null);
+              }}
+              className="rounded-full px-2 py-1 text-xs font-semibold text-slate-500 transition hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+            >
+              Change
+            </button>
+          </div>
+        </header>
 
-      <section style={{ marginBottom: "1rem", display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-        <button
-          onClick={handleShareLocation}
-          type="button"
-          style={{ padding: "0.5rem 1rem", borderRadius: 6, border: "1px solid #ddd" }}
-        >
-          Share location
-        </button>
-        {location && (
-          <span style={{ alignSelf: "center", color: "#2d7" }}>
-            Location ready ✓
-          </span>
-        )}
-      </section>
+        <section className="flex flex-1 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+          <div
+            ref={chatContainerRef}
+            onScroll={handleScroll}
+            className="flex-1 space-y-4 overflow-y-auto px-4 py-6 sm:px-6"
+          >
+            {!locationReady && (
+              <LocationGate
+                onShareLocation={handleShareLocation}
+                manualLocationInput={manualLocationInput}
+                onManualLocationChange={(event) => setManualLocationInput(event.target.value)}
+                onSetManualLocation={handleSetManualLocation}
+                errorMessage={locationError}
+              />
+            )}
 
-      {locationError && (
-        <div style={{ marginBottom: "1rem", color: "#b00" }}>{locationError}</div>
-      )}
-
-      {!location && (
-        <div style={{ marginBottom: "1rem" }}>
-          <label style={{ display: "block", marginBottom: "0.5rem" }}>
-            Enter your location
-          </label>
-          <input
-            value={locationText}
-            onChange={(event) => setLocationText(event.target.value)}
-            placeholder="e.g., Downtown San Francisco"
-            style={{ width: "100%", padding: "0.6rem", borderRadius: 6, border: "1px solid #ddd" }}
-          />
-        </div>
-      )}
-
-      <section style={{ marginBottom: "2rem" }}>
-        {messages.map((message) => (
-          <div key={message.id} style={{ marginBottom: "1rem" }}>
-            <strong style={{ display: "block", marginBottom: "0.25rem" }}>
-              {message.role === "user" ? "You" : "FoodBuddy"}
-            </strong>
-            <div style={{ whiteSpace: "pre-line" }}>{message.content}</div>
-            {message.recommendations && message.recommendations.length > 0 && (
-              <div style={{ marginTop: "0.75rem", display: "grid", gap: "0.75rem" }}>
-                {message.recommendations.map((rec) => (
-                  <article
-                    key={rec.placeId}
-                    style={{ border: "1px solid #eee", borderRadius: 8, padding: "0.75rem" }}
-                  >
-                    <h3 style={{ margin: 0 }}>{rec.name}</h3>
-                    <div style={{ color: "#666", marginTop: "0.25rem" }}>
-                      {rec.rating ? `${rec.rating.toFixed(1)}★` : "No rating"}
-                      {typeof rec.distanceMeters === "number" && (
-                        <span>{` · ${Math.round(rec.distanceMeters)}m away`}</span>
-                      )}
-                      {rec.openNow !== undefined && (
-                        <span>{rec.openNow ? " · Open now" : " · Closed"}</span>
-                      )}
-                    </div>
-                    {rec.address && (
-                      <div style={{ marginTop: "0.25rem", color: "#555" }}>{rec.address}</div>
-                    )}
-                    {rec.rationale && (
-                      <p style={{ marginTop: "0.5rem", color: "#444" }}>{rec.rationale}</p>
-                    )}
-                    {rec.mapsUrl && (
-                      <a
-                        href={rec.mapsUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ marginTop: "0.5rem", display: "inline-block", color: "#0a5" }}
+            {messages.map((message) => (
+              <div key={message.id} className="space-y-3">
+                <MessageBubble message={message} onRetry={handleRetry}>
+                  {message.recommendations && message.recommendations.length > 0 && (
+                    <div className="mt-3 grid gap-3">
+                      {message.recommendations.map((rec) => (
+                        <RecommendationCard
+                          key={rec.placeId}
+                          recommendation={rec}
+                          onRate={handleRateFromCard}
+                        />
+                      ))}
+                      <button
+                        type="button"
+                        onClick={handleShowMore}
+                        className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
                       >
-                        View on Maps
-                      </a>
-                    )}
-                  </article>
-                ))}
+                        Show 3 more
+                      </button>
+                    </div>
+                  )}
+                </MessageBubble>
+                <div className="h-px w-full bg-slate-100" />
+              </div>
+            ))}
+
+            {loading && (
+              <div className="flex justify-start">
+                <div className="max-w-[80%] rounded-2xl bg-slate-100 px-4 py-3 shadow-sm">
+                  <div className="h-4 w-32 animate-pulse rounded bg-slate-200" />
+                  <div className="mt-2 h-3 w-52 animate-pulse rounded bg-slate-200" />
+                  <p className="mt-2 text-xs text-slate-400">Assistant is thinking…</p>
+                </div>
+              </div>
+            )}
+
+            {feedbackPromptVisible && feedbackOptions.length > 0 && !feedbackSubmitted && (
+              <div className="flex justify-start">
+                <div className="max-w-[90%]">
+                  <FeedbackCard
+                    options={feedbackOptions}
+                    selectedPlaceId={selectedPlaceId}
+                    rating={rating}
+                    commentText={commentText}
+                    selectedTags={selectedTags}
+                    onPlaceChange={setSelectedPlaceId}
+                    onRatingChange={setRating}
+                    onCommentChange={setCommentText}
+                    onToggleTag={handleToggleTag}
+                    onSubmit={handleFeedbackSubmit}
+                    onSkip={() => {
+                      setFeedbackPromptVisible(false);
+                      setFeedbackSubmitted(true);
+                    }}
+                    errorMessage={feedbackError}
+                  />
+                </div>
+              </div>
+            )}
+
+            {feedbackSuccess && (
+              <div className="flex justify-start">
+                <div className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700 shadow-sm">
+                  {feedbackSuccess}
+                </div>
               </div>
             )}
           </div>
-        ))}
-      </section>
 
-      <form onSubmit={handleSubmit} style={{ display: "flex", gap: "0.5rem" }}>
-        <input
-          value={input}
-          onChange={(event) => {
-            setInput(event.target.value);
-            noteActivity();
-          }}
-          placeholder="Try 'open sushi nearby'"
-          style={{ flex: 1, padding: "0.6rem", borderRadius: 6, border: "1px solid #ddd" }}
-        />
-        <button
-          type="submit"
-          disabled={loading}
-          style={{ padding: "0.6rem 1rem", borderRadius: 6, border: "1px solid #ddd" }}
-        >
-          {loading ? "Sending..." : "Send"}
-        </button>
-      </form>
-
-      {feedbackPromptVisible && feedbackOptions.length > 0 && !feedbackSubmitted && (
-        <section
-          style={{
-            marginTop: "2rem",
-            padding: "1rem",
-            borderRadius: 10,
-            border: "1px solid #e6e6e6",
-            background: "#fafafa",
-          }}
-        >
-          <h2 style={{ marginTop: 0 }}>Did you try any? Rate 1–5</h2>
-          <p style={{ color: "#555" }}>Share feedback to help the community.</p>
-          <form onSubmit={handleFeedbackSubmit} style={{ display: "grid", gap: "0.75rem" }}>
-            <label style={{ display: "grid", gap: "0.35rem" }}>
-              Place tried
-              <select
-                value={selectedPlaceId}
-                onChange={(event) => setSelectedPlaceId(event.target.value)}
-                style={{ padding: "0.5rem", borderRadius: 6, border: "1px solid #ddd" }}
-              >
-                {feedbackOptions.map((option) => (
-                  <option key={option.placeId} value={option.placeId}>
-                    {option.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div style={{ display: "grid", gap: "0.35rem" }}>
-              <span>Rating</span>
-              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                {[1, 2, 3, 4, 5].map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setRating(value)}
-                    style={{
-                      padding: "0.4rem 0.75rem",
-                      borderRadius: 999,
-                      border: "1px solid #ddd",
-                      background: rating === value ? "#0a5" : "#fff",
-                      color: rating === value ? "#fff" : "#222",
-                    }}
-                  >
-                    {value}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <label style={{ display: "grid", gap: "0.35rem" }}>
-              Optional comment
-              <textarea
-                value={commentText}
-                onChange={(event) => setCommentText(event.target.value)}
-                rows={3}
-                style={{ padding: "0.5rem", borderRadius: 6, border: "1px solid #ddd" }}
-                placeholder="Tell us what you liked"
-              />
-            </label>
-            <label style={{ display: "grid", gap: "0.35rem" }}>
-              Optional tags (comma separated)
-              <input
-                value={tagText}
-                onChange={(event) => setTagText(event.target.value)}
-                placeholder="cozy, quick bite, family"
-                style={{ padding: "0.5rem", borderRadius: 6, border: "1px solid #ddd" }}
-              />
-            </label>
-            {feedbackError && <div style={{ color: "#b00" }}>{feedbackError}</div>}
-            <button
-              type="submit"
-              style={{ padding: "0.6rem 1rem", borderRadius: 6, border: "1px solid #ddd" }}
-            >
-              Submit feedback
-            </button>
+          <form onSubmit={handleSubmit}>
+            <Composer
+              value={input}
+              onChange={(value) => {
+                setInput(value);
+                noteActivity();
+              }}
+              onSubmit={() => sendMessage(input)}
+              disabled={!canSend}
+              placeholder={composerPlaceholder}
+            />
           </form>
         </section>
-      )}
-
-      {feedbackSuccess && (
-        <div style={{ marginTop: "1rem", color: "#0a5" }}>{feedbackSuccess}</div>
-      )}
+      </div>
     </main>
   );
 }
