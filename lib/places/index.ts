@@ -1,11 +1,11 @@
 import { config } from "../config";
 import type { PlacesProvider } from "./provider";
 import { GoogleApiProvider } from "./googleApiProvider";
-import { McpPlacesProvider } from "./mcpProvider";
+import { ComposioMcpProvider } from "./composioMcpProvider";
 
 export const getPlacesProvider = (): PlacesProvider => {
   if (config.GOOGLE_PROVIDER === "MCP") {
-    return new McpPlacesProvider(config.MCP_GOOGLE_MAPS_URL!);
+    return new ComposioMcpProvider();
   }
 
   return new GoogleApiProvider(config.GOOGLE_MAPS_API_KEY!);

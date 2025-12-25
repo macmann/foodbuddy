@@ -19,7 +19,8 @@ const envSchema = z
     ENABLE_RAG: z.preprocess(toBoolean, z.boolean()).default(false),
     GOOGLE_PROVIDER: z.enum(["API", "MCP"]),
     GOOGLE_MAPS_API_KEY: z.string().optional(),
-    MCP_GOOGLE_MAPS_URL: z.string().url().optional(),
+    COMPOSIO_MCP_URL: z.string().url().optional(),
+    COMPOSIO_API_KEY: z.string().optional(),
   })
   .superRefine((values, ctx) => {
     if (values.GOOGLE_PROVIDER === "API" && !values.GOOGLE_MAPS_API_KEY) {
@@ -30,11 +31,19 @@ const envSchema = z
       });
     }
 
-    if (values.GOOGLE_PROVIDER === "MCP" && !values.MCP_GOOGLE_MAPS_URL) {
+    if (values.GOOGLE_PROVIDER === "MCP" && !values.COMPOSIO_MCP_URL) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "MCP_GOOGLE_MAPS_URL is required when GOOGLE_PROVIDER=MCP",
-        path: ["MCP_GOOGLE_MAPS_URL"],
+        message: "COMPOSIO_MCP_URL is required when GOOGLE_PROVIDER=MCP",
+        path: ["COMPOSIO_MCP_URL"],
+      });
+    }
+
+    if (values.GOOGLE_PROVIDER === "MCP" && !values.COMPOSIO_API_KEY) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "COMPOSIO_API_KEY is required when GOOGLE_PROVIDER=MCP",
+        path: ["COMPOSIO_API_KEY"],
       });
     }
   });
@@ -47,5 +56,6 @@ export const config = envSchema.parse({
   ENABLE_RAG: process.env.ENABLE_RAG,
   GOOGLE_PROVIDER: process.env.GOOGLE_PROVIDER,
   GOOGLE_MAPS_API_KEY: process.env.GOOGLE_MAPS_API_KEY,
-  MCP_GOOGLE_MAPS_URL: process.env.MCP_GOOGLE_MAPS_URL,
+  COMPOSIO_MCP_URL: process.env.COMPOSIO_MCP_URL,
+  COMPOSIO_API_KEY: process.env.COMPOSIO_API_KEY,
 });
