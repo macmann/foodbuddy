@@ -1,6 +1,7 @@
 export type Coordinates = {
   lat: number;
   lng: number;
+  formattedAddress?: string;
 };
 
 export type PlaceCandidate = {

@@ -18,14 +18,18 @@ Required:
 
 - `DATABASE_URL`
 - `NODE_ENV`
-- `APP_ENV`
-- `APP_NAME`
-- `JWT_SECRET`
+- `OPENAI_API_KEY`
+- `ANON_ID_SALT`
+- `GOOGLE_PROVIDER`
+
+Places providers:
+
+- Direct API mode: set `GOOGLE_PROVIDER=API` and `GOOGLE_MAPS_API_KEY`
+- Composio MCP mode: set `GOOGLE_PROVIDER=MCP`, `COMPOSIO_MCP_URL`, and `COMPOSIO_API_KEY`
+  - Google API key is not needed in FoodBuddy env for MCP mode
 
 Optional (feature flags and integrations):
 
-- `FEATURE_TELEGRAM`
-- `FEATURE_RAG`
 - `TELEGRAM_BOT_TOKEN`
-- `OPENAI_API_KEY`
-- `RAG_SERVICE_URL`
+- `ENABLE_TELEGRAM`
+- `ENABLE_RAG`
