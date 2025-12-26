@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "../../../../lib/db";
 import { hashUserId } from "../../../../lib/hash";
-import { recommend } from "../../../../lib/reco/engine";
+import { parseQuery, recommend, writeRecommendationEvent } from "../../../../lib/reco/engine";
 import { commentContainsUrl, recordPlaceFeedback } from "../../../../lib/feedback";
 import { logger } from "../../../../lib/logger";
 import { createRequestContext } from "../../../../lib/request";
@@ -204,26 +204,67 @@ export async function POST(request: Request) {
     return respond(200, { ok: true });
   }
 
-  const recommendation = await recommend({
-    channel: "TELEGRAM",
-    userIdHash,
-    location: { lat: locationState.lastLat, lng: locationState.lastLng },
-    queryText: text,
-  });
+  const recommendationStart = Date.now();
+  const parsedConstraints = parseQuery(text);
+  let recommendation;
+
+  try {
+    recommendation = await recommend({
+      channel: "TELEGRAM",
+      userIdHash,
+      location: { lat: locationState.lastLat, lng: locationState.lastLng },
+      queryText: text,
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    await writeRecommendationEvent(
+      {
+        channel: "TELEGRAM",
+        userIdHash,
+        location: { lat: locationState.lastLat, lng: locationState.lastLng },
+        queryText: text,
+      },
+      {
+        status: "ERROR",
+        latencyMs: Date.now() - recommendationStart,
+        errorMessage,
+        resultCount: 0,
+        recommendedPlaceIds: [],
+        parsedConstraints,
+      },
+    );
+    logger.error({ error }, "Failed to recommend places for telegram");
+    await sendTelegramMessage(chatId, "Something went wrong. Please try again.");
+    return respond(200, { ok: true });
+  }
 
   const places = [recommendation.primary, ...recommendation.alternatives]
     .filter(Boolean)
     .slice(0, 3);
+  const recommendedPlaceIds = places.map((item) => item.place.placeId);
+
+  await writeRecommendationEvent(
+    {
+      channel: "TELEGRAM",
+      userIdHash,
+      location: { lat: locationState.lastLat, lng: locationState.lastLng },
+      queryText: text,
+    },
+    {
+      status: places.length === 0 ? "NO_RESULTS" : "OK",
+      latencyMs: Date.now() - recommendationStart,
+      resultCount: places.length,
+      recommendedPlaceIds,
+      parsedConstraints,
+    },
+  );
 
   if (places.length === 0) {
     await sendTelegramMessage(chatId, "Sorry, I couldn't find anything nearby.");
     return respond(200, { ok: true });
   }
 
-  recommendationCache.set(
-    userIdHash,
-    places.map((item) => item.place.placeId),
-  );
+  recommendationCache.set(userIdHash, recommendedPlaceIds);
 
   const lines = places.map((item, index) => {
     const rating = item.place.rating ? `${item.place.rating.toFixed(1)}★` : "No rating";
