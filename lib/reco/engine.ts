@@ -31,6 +31,8 @@ type RecommendationResponse = {
   debug?: Record<string, unknown>;
 };
 
+type RecommendationStatus = "OK" | "ERROR" | "NO_RESULTS";
+
 type ParsedQuery = {
   keyword?: string;
   radiusMeters: number;
@@ -41,6 +43,15 @@ type ParsedQuery = {
 const DEFAULT_RADIUS_METERS = 1500;
 const EXPANDED_RADIUS_METERS = 3000;
 const MAX_DETAILS = 5;
+
+type RecommendationMetadata = {
+  status: RecommendationStatus;
+  latencyMs: number;
+  errorMessage?: string;
+  resultCount: number;
+  recommendedPlaceIds: string[];
+  parsedConstraints: ParsedQuery;
+};
 
 export const recommend = async (
   input: RecommendationInput,
@@ -67,7 +78,6 @@ export const recommend = async (
   }
 
   if (candidates.length === 0) {
-    await writeRecommendationEvent(input, []);
     return { primary: null, alternatives: [] };
   }
 
@@ -137,18 +147,13 @@ export const recommend = async (
 
   const [primary, ...alternatives] = results;
 
-  await writeRecommendationEvent(
-    input,
-    results.map((result) => result.place.placeId),
-  );
-
   return {
     primary: primary ?? null,
     alternatives: alternatives.slice(0, 2),
   };
 };
 
-const parseQuery = (queryText: string): ParsedQuery => {
+export const parseQuery = (queryText: string): ParsedQuery => {
   const lower = queryText.toLowerCase();
   const openNow = lower.includes("open");
 
@@ -206,9 +211,9 @@ const upsertPlaces = async (places: PlaceDetails[]): Promise<void> => {
   );
 };
 
-const writeRecommendationEvent = async (
+export const writeRecommendationEvent = async (
   input: RecommendationInput,
-  recommendedPlaceIds: string[],
+  metadata: RecommendationMetadata,
 ): Promise<void> => {
   try {
     await prisma.recommendationEvent.create({
@@ -218,13 +223,20 @@ const writeRecommendationEvent = async (
         userLat: input.location.lat,
         userLng: input.location.lng,
         queryText: input.queryText,
-        recommendedPlaceIds,
+        recommendedPlaceIds: metadata.recommendedPlaceIds,
+        status: metadata.status,
+        latencyMs: metadata.latencyMs,
+        errorMessage: metadata.errorMessage,
+        resultCount: metadata.resultCount,
+        parsedConstraints: metadata.parsedConstraints,
       },
     });
   } catch (error) {
     logger.error({ error }, "Failed to persist recommendation event");
   }
 };
+
+export type { ParsedQuery, RecommendationMetadata, RecommendationStatus };
 
 const buildExplanation = (
   place: PlaceDetails,

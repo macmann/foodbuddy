@@ -4,7 +4,7 @@ import { getPlacesProvider } from "../../../lib/places";
 import { logger } from "../../../lib/logger";
 import { createRequestContext } from "../../../lib/request";
 import { rateLimit } from "../../../lib/rateLimit";
-import { recommend } from "../../../lib/reco/engine";
+import { parseQuery, recommend, writeRecommendationEvent } from "../../../lib/reco/engine";
 import { haversineMeters } from "../../../lib/reco/scoring";
 
 const buildRecommendationPayload = (
@@ -78,15 +78,59 @@ export async function POST(request: Request) {
     return respond(400, { error: "Location is required" });
   }
 
-  const recommendation = await recommend({
-    channel: "WEB",
-    userIdHash,
-    location,
-    queryText: body.message,
-  });
+  const recommendationStart = Date.now();
+  const parsedConstraints = parseQuery(body.message);
+  let recommendation;
+  try {
+    recommendation = await recommend({
+      channel: "WEB",
+      userIdHash,
+      location,
+      queryText: body.message,
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    await writeRecommendationEvent(
+      {
+        channel: "WEB",
+        userIdHash,
+        location,
+        queryText: body.message,
+      },
+      {
+        status: "ERROR",
+        latencyMs: Date.now() - recommendationStart,
+        errorMessage,
+        resultCount: 0,
+        recommendedPlaceIds: [],
+        parsedConstraints,
+      },
+    );
+    logger.error({ error, ...logContext }, "Failed to generate recommendations");
+    return respond(500, { error: "Failed to generate recommendations" });
+  }
 
   const payload = buildRecommendationPayload(recommendation, location);
   const [primary, ...alternatives] = payload;
+  const recommendedPlaceIds = payload.map((item) => item.placeId);
+  const resultCount = payload.length;
+  const status = resultCount === 0 ? "NO_RESULTS" : "OK";
+
+  await writeRecommendationEvent(
+    {
+      channel: "WEB",
+      userIdHash,
+      location,
+      queryText: body.message,
+    },
+    {
+      status,
+      latencyMs: Date.now() - recommendationStart,
+      resultCount,
+      recommendedPlaceIds,
+      parsedConstraints,
+    },
+  );
 
   const message = recommendation.primary
     ? "Here are a few spots you might like."
