@@ -106,65 +106,75 @@ export default async function AdminFeedbackPage({
                 </td>
               </tr>
             ) : (
-              items.map((feedback) => (
-                <tr key={feedback.id} className="hover:bg-slate-950/40">
-                  <td className="px-4 py-3 text-slate-300">
-                    {new Date(feedback.createdAt).toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div>
-                      <p className="text-sm font-semibold text-white">
-                        {feedback.place.name}
-                      </p>
-                      <p className="text-xs text-slate-500">{feedback.placeId}</p>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">{feedback.rating}★</td>
-                  <td className="px-4 py-3">
-                    <span className="line-clamp-2 max-w-xs text-slate-100">
-                      {feedback.commentText ?? "No comment"}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    {Array.isArray(feedback.tags) && feedback.tags.length > 0 ? (
-                      <div className="flex flex-wrap gap-2">
-                        {feedback.tags.map((tag) => (
-                          <span
-                            key={tag}
-                            className="rounded-full bg-slate-800 px-2 py-1 text-xs text-slate-200"
-                          >
-                            {tag}
-                          </span>
-                        ))}
+              items.map((feedback) => {
+                const tags: string[] = Array.isArray(feedback.tags)
+                  ? (feedback.tags as unknown[]).filter(
+                      (t): t is string => typeof t === "string"
+                    )
+                  : [];
+
+                return (
+                  <tr key={feedback.id} className="hover:bg-slate-950/40">
+                    <td className="px-4 py-3 text-slate-300">
+                      {new Date(feedback.createdAt).toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div>
+                        <p className="text-sm font-semibold text-white">
+                          {feedback.place.name}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {feedback.placeId}
+                        </p>
                       </div>
-                    ) : (
-                      <span className="text-slate-500">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">{feedback.channel}</td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`rounded-full px-3 py-1 text-xs font-semibold ${statusStyles[feedback.moderationStatus]}`}
-                    >
-                      {feedback.moderationStatus}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <FeedbackActions
-                        feedbackId={feedback.id}
-                        status={feedback.moderationStatus}
-                      />
-                      <Link
-                        href={`/admin/feedback/${feedback.id}`}
-                        className="text-xs text-emerald-300 hover:text-emerald-200"
+                    </td>
+                    <td className="px-4 py-3">{feedback.rating}★</td>
+                    <td className="px-4 py-3">
+                      <span className="line-clamp-2 max-w-xs text-slate-100">
+                        {feedback.commentText ?? "No comment"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      {tags.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {tags.map((tag) => (
+                            <span
+                              key={tag}
+                              className="rounded-full bg-slate-800 px-2 py-1 text-xs text-slate-200"
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-slate-500">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">{feedback.channel}</td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-semibold ${statusStyles[feedback.moderationStatus as ModerationStatus]}`}
                       >
-                        View
-                      </Link>
-                    </div>
-                  </td>
-                </tr>
-              ))
+                        {feedback.moderationStatus}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <FeedbackActions
+                          feedbackId={feedback.id}
+                          status={feedback.moderationStatus}
+                        />
+                        <Link
+                          href={`/admin/feedback/${feedback.id}`}
+                          className="text-xs text-emerald-300 hover:text-emerald-200"
+                        >
+                          View
+                        </Link>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
