@@ -15,8 +15,13 @@ const statusStyles: Record<string, string> = {
   NO_RESULTS: "bg-amber-400/20 text-amber-200",
 };
 
-export default async function QueryDetailPage({ params }: { params: { id: string } }) {
-  const data = await getQueryDetailWithPlaces(params.id);
+export default async function QueryDetailPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  const data = await getQueryDetailWithPlaces(id);
   if (!data) {
     return notFound();
   }
