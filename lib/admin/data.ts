@@ -391,7 +391,7 @@ export const listFeedback = async ({
   const [items, total] = await prisma.$transaction([
     prisma.placeFeedback.findMany({
       where,
-      include: { place: { select: { id: true, name: true } } },
+      include: { place: { select: { placeId: true, name: true } } },
       orderBy: { createdAt: "desc" },
       skip: (page - 1) * pageSize,
       take: pageSize,
