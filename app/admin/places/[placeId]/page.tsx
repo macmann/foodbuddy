@@ -129,33 +129,39 @@ export default async function PlaceDetailPage({
           {feedback.length === 0 ? (
             <p className="text-sm text-slate-400">No feedback yet.</p>
           ) : (
-            feedback.map((entry) => (
-              <div key={entry.id} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm font-semibold text-white">
-                    {entry.rating}★ · {entry.channel}
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    {new Date(entry.createdAt).toLocaleString()}
-                  </p>
-                </div>
-                <p className="mt-2 text-sm text-slate-300">
-                  {entry.commentText ?? "No comment provided."}
-                </p>
-                {Array.isArray(entry.tags) && entry.tags.length > 0 ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {entry.tags.map((tag) => (
-                      <span
-                        key={tag}
-                        className="rounded-full bg-slate-800 px-2 py-1 text-xs text-slate-200"
-                      >
-                        {tag}
-                      </span>
-                    ))}
+            feedback.map((entry) => {
+              const tags: string[] = Array.isArray(entry.tags)
+                ? entry.tags.filter((t): t is string => typeof t === "string")
+                : [];
+
+              return (
+                <div key={entry.id} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-white">
+                      {entry.rating}★ · {entry.channel}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {new Date(entry.createdAt).toLocaleString()}
+                    </p>
                   </div>
-                ) : null}
-              </div>
-            ))
+                  <p className="mt-2 text-sm text-slate-300">
+                    {entry.commentText ?? "No comment provided."}
+                  </p>
+                  {tags.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {tags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="rounded-full bg-slate-800 px-2 py-1 text-xs text-slate-200"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })
           )}
         </div>
       </div>
