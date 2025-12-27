@@ -176,8 +176,8 @@ export const listQueries = async ({
     ...(q
       ? {
           OR: [
-            { queryText: { contains: q, mode: "insensitive" } },
-            { userIdHash: { contains: q, mode: "insensitive" } },
+            { queryText: { contains: q, mode: Prisma.QueryMode.insensitive } },
+            { userIdHash: { contains: q, mode: Prisma.QueryMode.insensitive } },
           ],
         }
       : {}),
