@@ -78,9 +78,9 @@ const ChartPanel = ({ title, data }: { title: string; data: { label: string; cou
 export default async function AdminDashboardPage({
   searchParams,
 }: {
-  searchParams?: SearchParams | Promise<SearchParams>;
+  searchParams?: Promise<SearchParams>;
 }) {
-  const resolvedSearchParams = await Promise.resolve(searchParams ?? {});
+  const resolvedSearchParams = (await searchParams) ?? {};
   const rangeParam = parseParam(resolvedSearchParams.range) ?? "today";
   const channelParam = parseParam(resolvedSearchParams.channel) ?? "all";
   const channel = channelParam === "all" ? undefined : (channelParam as Channel);
