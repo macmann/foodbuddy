@@ -4,10 +4,11 @@ import { getPlacesProvider } from "../../../../../../lib/places";
 
 export const POST = async (
   _request: Request,
-  { params }: { params: { placeId: string } },
+  { params }: { params: Promise<{ placeId: string }> },
 ) => {
   const provider = getPlacesProvider();
-  const details = await provider.placeDetails(params.placeId);
+  const { placeId } = await params;
+  const details = await provider.placeDetails(placeId);
 
   if (!details) {
     return NextResponse.json({ ok: false }, { status: 404 });
