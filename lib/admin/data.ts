@@ -388,7 +388,7 @@ export const listFeedback = async ({
       : {}),
   };
 
-  const [items, total] = await prisma.$transaction<[FeedbackWithPlace[], number]>([
+  const [items, total] = await prisma.$transaction([
     prisma.placeFeedback.findMany({
       where,
       include: { place: { select: { id: true, name: true } } },
@@ -399,7 +399,7 @@ export const listFeedback = async ({
     prisma.placeFeedback.count({ where }),
   ]);
 
-  return { items, total, page, pageSize };
+  return { items: items as FeedbackWithPlace[], total, page, pageSize };
 };
 
 export const getFeedbackDetailWithContext = async (feedbackId: string) => {
