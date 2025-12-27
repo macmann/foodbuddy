@@ -40,6 +40,10 @@ type FeedbackFilters = {
   pageSize: number;
 };
 
+type FeedbackWithPlace = Prisma.FeedbackGetPayload<{
+  include: { place: { select: { id: true; name: true } } };
+}>;
+
 const parseRecommendationIds = (value: unknown): string[] => {
   if (!Array.isArray(value)) {
     return [];
@@ -337,7 +341,7 @@ export const listFeedback = async ({
       : {}),
   };
 
-  const [items, total] = await prisma.$transaction([
+  const [items, total] = await prisma.$transaction<[FeedbackWithPlace[], number]>([
     prisma.placeFeedback.findMany({
       where,
       include: { place: { select: { id: true, name: true } } },
