@@ -6,9 +6,10 @@ import { getFeedbackDetailWithContext } from "../../../../lib/admin/data";
 export default async function FeedbackDetailPage({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  const data = await getFeedbackDetailWithContext(params.id);
+  const { id } = await params;
+  const data = await getFeedbackDetailWithContext(id);
   if (!data) {
     return notFound();
   }

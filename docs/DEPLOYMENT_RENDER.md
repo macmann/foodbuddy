@@ -3,7 +3,7 @@
 ## Build Command
 
 ```
-npm install && npx prisma generate && npx prisma migrate deploy && npm run build
+npm install --include=dev && npx prisma generate && npx prisma migrate deploy && npm run build
 ```
 
 ## Start Command

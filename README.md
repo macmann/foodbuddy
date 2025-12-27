@@ -90,7 +90,7 @@ npm run start
 ### Render
 
 1. Create a new Web Service in Render and connect the repository.
-2. Set the build command to `npm install && npm run build`.
+2. Set the build command to `npm install --include=dev && npm run build`.
 3. Set the start command to `npm run start`.
 4. Add required environment variables (for example, `DATABASE_URL`, Places provider settings,
    and any feature flags from `.env.example`).
