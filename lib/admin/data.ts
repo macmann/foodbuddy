@@ -46,7 +46,7 @@ type FeedbackFilters = {
 };
 
 type FeedbackWithPlace = Prisma.PlaceFeedbackGetPayload<{
-  include: { place: { select: { id: true; name: true } } };
+  include: { place: { select: { placeId: true; name: true } } };
 }>;
 
 type PlaceListItem = Omit<
@@ -399,7 +399,7 @@ export const listFeedback = async ({
     prisma.placeFeedback.count({ where }),
   ]);
 
-  return { items: items as FeedbackWithPlace[], total, page, pageSize };
+  return { items, total, page, pageSize };
 };
 
 export const getFeedbackDetailWithContext = async (feedbackId: string) => {
