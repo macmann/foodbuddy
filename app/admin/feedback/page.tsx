@@ -30,14 +30,14 @@ const statusStyles: Record<ModerationStatus, string> = {
 export default async function AdminFeedbackPage({
   searchParams,
 }: {
-  searchParams?: SearchParams | Promise<SearchParams>;
+  searchParams?: Promise<SearchParams>;
 }) {
-  const resolvedSearchParams = await Promise.resolve(searchParams ?? {});
-  const statusParam = parseParam(resolvedSearchParams.status) ?? "all";
-  const placeParam = parseParam(resolvedSearchParams.place) ?? "";
-  const qParam = parseParam(resolvedSearchParams.q) ?? "";
-  const rangeParam = parseParam(resolvedSearchParams.range) ?? "today";
-  const page = Number.parseInt(parseParam(resolvedSearchParams.page) ?? "1", 10) || 1;
+  const sp = (await searchParams) ?? {};
+  const statusParam = parseParam(sp.status) ?? "all";
+  const placeParam = parseParam(sp.place) ?? "";
+  const qParam = parseParam(sp.q) ?? "";
+  const rangeParam = parseParam(sp.range) ?? "today";
+  const page = Number.parseInt(parseParam(sp.page) ?? "1", 10) || 1;
   const pageSize = 50;
 
   const { from, to } = getRange(rangeParam);
