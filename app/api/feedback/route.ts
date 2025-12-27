@@ -17,8 +17,8 @@ const feedbackSchema = z.object({
 
 export async function POST(request: Request) {
   const { requestId, startTime } = createRequestContext(request);
-  const channel = "WEB";
-  const logContext = { requestId, channel };
+  const requestChannel = "WEB";
+  const logContext = { requestId, channel: requestChannel };
   const respond = (status: number, payload: Record<string, unknown>) => {
     const response = NextResponse.json(payload, { status });
     response.headers.set("x-request-id", requestId);
