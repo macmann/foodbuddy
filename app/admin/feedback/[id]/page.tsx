@@ -15,6 +15,9 @@ export default async function FeedbackDetailPage({
   }
 
   const { feedback, lastRecommendation } = data;
+  const tags: string[] = Array.isArray(feedback.tags)
+    ? feedback.tags.filter((t): t is string => typeof t === "string")
+    : [];
 
   return (
     <section className="space-y-6">
@@ -56,8 +59,8 @@ export default async function FeedbackDetailPage({
           <div className="mt-4">
             <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Tags</p>
             <div className="mt-2 flex flex-wrap gap-2">
-              {Array.isArray(feedback.tags) && feedback.tags.length > 0 ? (
-                feedback.tags.map((tag) => (
+              {tags.length > 0 ? (
+                tags.map((tag) => (
                   <span
                     key={tag}
                     className="rounded-full bg-slate-800 px-2 py-1 text-xs text-slate-200"
