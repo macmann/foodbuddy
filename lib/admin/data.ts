@@ -377,13 +377,13 @@ export const listFeedback = async ({
   }
 
   const createdAt = buildDateRange({ from, to });
-  const where = {
+  const where: Prisma.PlaceFeedbackWhereInput = {
     ...(status ? { moderationStatus: status } : {}),
     ...(placeIds ? { placeId: { in: placeIds } } : {}),
     ...(createdAt ? { createdAt } : {}),
     ...(q
       ? {
-          commentText: { contains: q, mode: "insensitive" },
+          commentText: { contains: q, mode: Prisma.QueryMode.insensitive },
         }
       : {}),
   };
