@@ -3,8 +3,9 @@ import { unhideFeedback } from "../../../../../../lib/admin/data";
 
 export const POST = async (
   _request: Request,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) => {
-  await unhideFeedback(params.id);
+  const { id } = await params;
+  await unhideFeedback(id);
   return NextResponse.json({ ok: true });
 };
