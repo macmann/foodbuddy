@@ -45,7 +45,7 @@ type FeedbackFilters = {
   pageSize: number;
 };
 
-type FeedbackWithPlace = Prisma.FeedbackGetPayload<{
+type FeedbackWithPlace = Prisma.PlaceFeedbackGetPayload<{
   include: { place: { select: { id: true; name: true } } };
 }>;
 
