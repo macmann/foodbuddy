@@ -22,13 +22,13 @@ const parseTagCounts = (value: unknown) => {
 export default async function AdminPlacesPage({
   searchParams,
 }: {
-  searchParams?: SearchParams | Promise<SearchParams>;
+  searchParams?: Promise<SearchParams>;
 }) {
-  const resolvedSearchParams = await Promise.resolve(searchParams ?? {});
-  const qParam = parseParam(resolvedSearchParams.q) ?? "";
-  const minRatingParam = parseParam(resolvedSearchParams.minCommunityRating) ?? "";
-  const feedbackParam = parseParam(resolvedSearchParams.hasFeedback) ?? "all";
-  const page = Number.parseInt(parseParam(resolvedSearchParams.page) ?? "1", 10) || 1;
+  const sp = (await searchParams) ?? {};
+  const qParam = parseParam(sp.q) ?? "";
+  const minRatingParam = parseParam(sp.minCommunityRating) ?? "";
+  const feedbackParam = parseParam(sp.hasFeedback) ?? "all";
+  const page = Number.parseInt(parseParam(sp.page) ?? "1", 10) || 1;
   const pageSize = 50;
 
   const minCommunityRating = minRatingParam ? Number(minRatingParam) : undefined;
