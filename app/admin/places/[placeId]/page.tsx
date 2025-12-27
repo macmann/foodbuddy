@@ -9,9 +9,10 @@ const formatDate = (value: Date | null | undefined) =>
 export default async function PlaceDetailPage({
   params,
 }: {
-  params: { placeId: string };
+  params: Promise<{ placeId: string }>;
 }) {
-  const place = await getPlaceDetail(params.placeId);
+  const { placeId } = await params;
+  const place = await getPlaceDetail(placeId);
   if (!place) {
     return notFound();
   }
