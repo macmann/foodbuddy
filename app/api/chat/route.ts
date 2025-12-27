@@ -12,7 +12,10 @@ const buildRecommendationPayload = (
   location?: { lat: number; lng: number },
 ) => {
   const allResults = [result.primary, ...result.alternatives].filter(Boolean);
-  return allResults.map((item) => {
+  const results = allResults.filter(
+    (item): item is NonNullable<typeof item> => item !== null
+  );
+  return results.map((item) => {
     const distanceMeters = location
       ? haversineMeters(location, { lat: item.place.lat, lng: item.place.lng })
       : undefined;
