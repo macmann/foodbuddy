@@ -37,16 +37,16 @@ const statusStyles: Record<RecommendationStatus, string> = {
 export default async function AdminQueriesPage({
   searchParams,
 }: {
-  searchParams?: SearchParams | Promise<SearchParams>;
+  searchParams?: Promise<SearchParams>;
 }) {
-  const resolvedSearchParams = await Promise.resolve(searchParams ?? {});
-  const rangeParam = parseParam(resolvedSearchParams.range) ?? "today";
-  const channelParam = parseParam(resolvedSearchParams.channel) ?? "all";
-  const statusParam = parseParam(resolvedSearchParams.status) ?? "all";
-  const qParam = parseParam(resolvedSearchParams.q) ?? "";
-  const errorsOnly = parseParam(resolvedSearchParams.errors) === "1";
-  const noResultsOnly = parseParam(resolvedSearchParams.noResults) === "1";
-  const page = Number.parseInt(parseParam(resolvedSearchParams.page) ?? "1", 10) || 1;
+  const sp = (await searchParams) ?? {};
+  const rangeParam = parseParam(sp.range) ?? "today";
+  const channelParam = parseParam(sp.channel) ?? "all";
+  const statusParam = parseParam(sp.status) ?? "all";
+  const qParam = parseParam(sp.q) ?? "";
+  const errorsOnly = parseParam(sp.errors) === "1";
+  const noResultsOnly = parseParam(sp.noResults) === "1";
+  const page = Number.parseInt(parseParam(sp.page) ?? "1", 10) || 1;
   const pageSize = 50;
 
   const { from, to } = getRange(rangeParam);
