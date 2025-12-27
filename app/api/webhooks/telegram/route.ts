@@ -239,7 +239,7 @@ export async function POST(request: Request) {
   }
 
   const places = [recommendation.primary, ...recommendation.alternatives]
-    .filter(Boolean)
+    .filter((item): item is NonNullable<typeof item> => item !== null && item !== undefined)
     .slice(0, 3);
   const recommendedPlaceIds = places.map((item) => item.place.placeId);
 
