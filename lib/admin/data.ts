@@ -253,9 +253,9 @@ export const listPlaces = async ({
     ...(q
       ? {
           OR: [
-            { name: { contains: q, mode: "insensitive" } },
-            { address: { contains: q, mode: "insensitive" } },
-            { placeId: { contains: q, mode: "insensitive" } },
+            { name: { contains: q, mode: Prisma.QueryMode.insensitive } },
+            { address: { contains: q, mode: Prisma.QueryMode.insensitive } },
+            { placeId: { contains: q, mode: Prisma.QueryMode.insensitive } },
           ],
         }
       : {}),
