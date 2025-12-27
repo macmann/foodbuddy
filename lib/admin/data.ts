@@ -3,7 +3,12 @@ import "server-only";
 import { prisma } from "../db";
 import { recalculatePlaceAggregate } from "../feedback";
 import { Prisma } from "@prisma/client";
-import type { Channel, ModerationStatus, RecommendationStatus } from "@prisma/client";
+import type {
+  Channel,
+  ModerationStatus,
+  PlaceAggregate,
+  RecommendationStatus,
+} from "@prisma/client";
 
 type DateRange = {
   from?: Date;
@@ -43,6 +48,16 @@ type FeedbackFilters = {
 type FeedbackWithPlace = Prisma.FeedbackGetPayload<{
   include: { place: { select: { id: true; name: true } } };
 }>;
+
+type PlaceListItem = Omit<
+  Prisma.PlaceGetPayload<{
+    include: { aggregate: true; _count: { select: { feedback: true } } };
+  }>,
+  "aggregate"
+> & {
+  aggregate: (PlaceAggregate & { tagCounts?: unknown | null }) | null;
+  lastRecommendedAt: Date | null;
+};
 
 const parseRecommendationIds = (value: unknown): string[] => {
   if (!Array.isArray(value)) {
@@ -228,7 +243,12 @@ export const listPlaces = async ({
   hasFeedback,
   page,
   pageSize,
-}: PlaceFilters) => {
+}: PlaceFilters): Promise<{
+  items: PlaceListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+}> => {
   const where = {
     ...(q
       ? {
@@ -266,6 +286,28 @@ export const listPlaces = async ({
 
   const placeIds = items.map((item) => item.placeId);
   let lastRecommendedMap = new Map<string, Date | null>();
+  const tagCountsByPlace = new Map<string, Record<string, number>>();
+
+  if (placeIds.length > 0) {
+    const feedbackEntries = await prisma.placeFeedback.findMany({
+      where: { placeId: { in: placeIds } },
+      select: { placeId: true, tags: true },
+    });
+
+    for (const entry of feedbackEntries) {
+      if (!Array.isArray(entry.tags)) {
+        continue;
+      }
+      for (const tag of entry.tags) {
+        if (typeof tag !== "string") {
+          continue;
+        }
+        const counts = tagCountsByPlace.get(entry.placeId) ?? {};
+        counts[tag] = (counts[tag] ?? 0) + 1;
+        tagCountsByPlace.set(entry.placeId, counts);
+      }
+    }
+  }
 
   if (placeIds.length > 0) {
     const lastRecommended = await prisma.$queryRaw<
@@ -282,10 +324,15 @@ export const listPlaces = async ({
     );
   }
 
-  const enrichedItems = items.map((item) => ({
-    ...item,
-    lastRecommendedAt: lastRecommendedMap.get(item.placeId) ?? null,
-  }));
+  const enrichedItems = items.map((item) => {
+    const tagCounts = tagCountsByPlace.get(item.placeId) ?? null;
+
+    return {
+      ...item,
+      aggregate: item.aggregate ? { ...item.aggregate, tagCounts } : null,
+      lastRecommendedAt: lastRecommendedMap.get(item.placeId) ?? null,
+    };
+  });
 
   return { items: enrichedItems, total, page, pageSize };
 };
