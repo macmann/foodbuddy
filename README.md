@@ -64,6 +64,10 @@ npm run dev
 
 Then open `http://localhost:3000`.
 
+**User URL:** `http://localhost:3000`
+
+**Admin URL:** `http://localhost:3000/admin`
+
 ## How to Use
 
 1. **Launch the app** and open the home page.
