@@ -72,7 +72,7 @@ const getErrorSummary = async () => {
         by: ["errorMessage"],
         where: { status: "ERROR", createdAt: { gte: since } },
         _count: { _all: true },
-        orderBy: { _count: { _all: "desc" } },
+        orderBy: { _count: { id: "desc" } },
         take: 5,
       }),
     ]);
