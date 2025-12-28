@@ -46,7 +46,7 @@ export default function QueriesFilters({
 
   const updateParams = useCallback(
     (updates: Record<string, string | null>) => {
-      const params = new URLSearchParams(searchParams.toString());
+      const params = new URLSearchParams(searchParams?.toString() ?? "");
       Object.entries(updates).forEach(([key, value]) => {
         if (!value) {
           params.delete(key);
@@ -56,7 +56,8 @@ export default function QueriesFilters({
       });
       params.delete("page");
       const queryString = params.toString();
-      router.push(queryString ? `${pathname}?${queryString}` : pathname);
+      const safePathname = pathname ?? "";
+      router.push(queryString ? `${safePathname}?${queryString}` : safePathname);
     },
     [pathname, router, searchParams],
   );

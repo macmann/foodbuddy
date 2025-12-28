@@ -20,6 +20,7 @@ type SidebarNavProps = {
 
 export default function SidebarNav({ isOpen, onClose }: SidebarNavProps) {
   const pathname = usePathname();
+  const safePathname = pathname ?? "";
 
   return (
     <>
@@ -55,8 +56,8 @@ export default function SidebarNav({ isOpen, onClose }: SidebarNavProps) {
           {navItems.map((item) => {
             const isActive =
               item.href === "/admin"
-                ? pathname === "/admin"
-                : pathname.startsWith(item.href);
+                ? safePathname === "/admin"
+                : safePathname.startsWith(item.href);
 
             return (
               <Link

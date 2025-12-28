@@ -20,12 +20,13 @@ const titleMap = [
 export default function Topbar({ onMenuClick }: TopbarProps) {
   const router = useRouter();
   const pathname = usePathname();
+  const safePathname = pathname ?? "";
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const title = useMemo(() => {
-    const match = titleMap.find((item) => pathname.startsWith(item.href));
+    const match = titleMap.find((item) => safePathname.startsWith(item.href));
     return match?.label ?? "Dashboard";
-  }, [pathname]);
+  }, [safePathname]);
 
   const handleLogout = async () => {
     setIsLoggingOut(true);

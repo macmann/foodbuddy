@@ -27,7 +27,7 @@ export default function DashboardFilters({ range, channel }: DashboardFiltersPro
 
   const updateParam = useCallback(
     (key: string, value: string) => {
-      const params = new URLSearchParams(searchParams.toString());
+      const params = new URLSearchParams(searchParams?.toString() ?? "");
       if (value === "all" || value === "today") {
         params.delete(key);
       } else {
