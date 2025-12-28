@@ -1,6 +1,6 @@
 import "server-only";
 
-import { config } from "../config";
+import { getConfig } from "../config";
 import { logger } from "../logger";
 import { mcpCall } from "../mcp/client";
 import type { ListToolsResult, ToolDefinition } from "../mcp/types";
@@ -198,8 +198,8 @@ const extractPlacesArray = (payload: unknown): Record<string, unknown>[] => {
 
 export class ComposioMcpProvider implements PlacesProvider {
   constructor(
-    private readonly url = config.COMPOSIO_MCP_URL!,
-    private readonly apiKey = config.COMPOSIO_API_KEY!,
+    private readonly url = getConfig().COMPOSIO_MCP_URL!,
+    private readonly apiKey = getConfig().COMPOSIO_API_KEY!,
   ) {}
 
   async geocode(text: string): Promise<Coordinates | null> {
