@@ -2,11 +2,11 @@ import NextErrorComponent from "next/error";
 import type { NextPageContext } from "next";
 
 export type ErrorPageProps = {
-  statusCode?: number;
+  statusCode: number;
 };
 
 export default function ErrorPage({ statusCode }: ErrorPageProps) {
-  return <NextErrorComponent statusCode={statusCode} />;
+  return <NextErrorComponent statusCode={statusCode ?? 500} />;
 }
 
 ErrorPage.getInitialProps = ({ res, err }: NextPageContext) => {
