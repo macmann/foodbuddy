@@ -1,9 +1,10 @@
-import { config } from "../config";
+import { getConfig } from "../config";
 import type { PlacesProvider } from "./provider";
 import { GoogleApiProvider } from "./googleApiProvider";
 import { ComposioMcpProvider } from "./composioMcpProvider";
 
 export const getPlacesProvider = (): PlacesProvider => {
+  const config = getConfig();
   if (config.GOOGLE_PROVIDER === "MCP") {
     return new ComposioMcpProvider();
   }

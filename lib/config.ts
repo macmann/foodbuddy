@@ -50,12 +50,22 @@ const envSchema = z
 
 export type AppConfig = z.infer<typeof envSchema>;
 
-export const config = envSchema.parse({
-  ANON_ID_SALT: process.env.ANON_ID_SALT,
-  ENABLE_TELEGRAM: process.env.ENABLE_TELEGRAM,
-  ENABLE_RAG: process.env.ENABLE_RAG,
-  GOOGLE_PROVIDER: process.env.GOOGLE_PROVIDER,
-  GOOGLE_MAPS_API_KEY: process.env.GOOGLE_MAPS_API_KEY,
-  COMPOSIO_MCP_URL: process.env.COMPOSIO_MCP_URL,
-  COMPOSIO_API_KEY: process.env.COMPOSIO_API_KEY,
-});
+let cachedConfig: AppConfig | null = null;
+
+export const getConfig = (): AppConfig => {
+  if (cachedConfig) {
+    return cachedConfig;
+  }
+
+  cachedConfig = envSchema.parse({
+    ANON_ID_SALT: process.env.ANON_ID_SALT,
+    ENABLE_TELEGRAM: process.env.ENABLE_TELEGRAM,
+    ENABLE_RAG: process.env.ENABLE_RAG,
+    GOOGLE_PROVIDER: process.env.GOOGLE_PROVIDER,
+    GOOGLE_MAPS_API_KEY: process.env.GOOGLE_MAPS_API_KEY,
+    COMPOSIO_MCP_URL: process.env.COMPOSIO_MCP_URL,
+    COMPOSIO_API_KEY: process.env.COMPOSIO_API_KEY,
+  });
+
+  return cachedConfig;
+};
