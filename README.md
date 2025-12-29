@@ -100,6 +100,12 @@ npm run start
    and any feature flags from `.env.example`).
 5. Provision a managed database (e.g. Render Postgres) and update `DATABASE_URL`.
 
+**Render notes**
+
+- Ensure `DATABASE_URL` plus any `COMPOSIO_*` variables are set in the Render environment.
+- Render runs `npm start`, which applies `prisma migrate deploy` before starting the
+  Next.js standalone server.
+
 ## Troubleshooting
 
 - **Database errors**: ensure your database is running and `DATABASE_URL` is set.

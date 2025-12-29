@@ -12,7 +12,38 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 
 const buildRequestId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-export const mcpCall = async <T>({ url, apiKey, method, params }: McpCallOptions): Promise<T> => {
+const redactUrl = (rawUrl: string): string => {
+  try {
+    const parsed = new URL(rawUrl);
+    const sensitiveKeys = new Set([
+      "token",
+      "access_token",
+      "api_key",
+      "apikey",
+      "key",
+      "auth",
+      "authorization",
+    ]);
+    for (const key of parsed.searchParams.keys()) {
+      if (sensitiveKeys.has(key.toLowerCase())) {
+        parsed.searchParams.set(key, "REDACTED");
+      }
+    }
+    return parsed.toString();
+  } catch {
+    return rawUrl.replace(
+      /(token|access_token|api_key|apikey|key|auth|authorization)=([^&]+)/gi,
+      "$1=REDACTED",
+    );
+  }
+};
+
+export const mcpCall = async <T>({
+  url,
+  apiKey,
+  method,
+  params,
+}: McpCallOptions): Promise<T | null> => {
   const requestId = buildRequestId();
   const payload = {
     jsonrpc: "2.0",
@@ -28,12 +59,18 @@ export const mcpCall = async <T>({ url, apiKey, method, params }: McpCallOptions
 
   let response: Response;
   try {
+    const headers: Record<string, string> = {
+      accept: "application/json",
+      "content-type": "application/json",
+      "x-api-key": apiKey,
+    };
+    if (apiKey) {
+      headers.authorization = `Bearer ${apiKey}`;
+    }
+
     response = await fetch(url, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-      },
+      headers,
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
@@ -48,10 +85,18 @@ export const mcpCall = async <T>({ url, apiKey, method, params }: McpCallOptions
   }
 
   if (!response.ok) {
-    const error = new Error(`MCP request failed with status ${response.status}`);
-    (error as Error & { status?: number }).status = response.status;
-    logger.error({ method, requestId, status: response.status }, "MCP response not ok");
-    throw error;
+    const responseText = await response.text();
+    logger.error(
+      {
+        method,
+        requestId,
+        status: response.status,
+        url: redactUrl(url),
+        responseText: responseText.slice(0, 500),
+      },
+      "MCP response not ok",
+    );
+    return null;
   }
 
   let data: JsonRpcResponse<T> | null = null;

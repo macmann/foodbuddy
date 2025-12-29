@@ -380,7 +380,7 @@ export class ComposioMcpProvider implements PlacesProvider {
     name: string,
     args: Record<string, unknown>,
     requestId: string,
-  ): Promise<unknown> {
+  ): Promise<unknown | null> {
     const call = () =>
       mcpCall<unknown>({
         url: this.url,

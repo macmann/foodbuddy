@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import { prisma } from "../db";
 import { logger } from "../logger";
 import { getPlacesProvider } from "../places";
@@ -232,7 +234,17 @@ export const writeRecommendationEvent = async (
       },
     });
   } catch (error) {
-    logger.error({ error }, "Failed to persist recommendation event");
+    const prismaError =
+      error instanceof Prisma.PrismaClientKnownRequestError ? error : null;
+    const meta = prismaError?.meta as { modelName?: string; table?: string } | undefined;
+    logger.error(
+      {
+        error,
+        prismaCode: prismaError?.code,
+        prismaModel: meta?.modelName ?? meta?.table,
+      },
+      "Failed to persist recommendation event. Run `prisma migrate deploy` to ensure migrations are applied.",
+    );
   }
 };
 
