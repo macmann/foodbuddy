@@ -1,11 +1,9 @@
 "use client";
 
-export default function GlobalError() {
+export default function Error() {
   return (
-    <html>
-      <body>
-        <h1>Something went wrong</h1>
-      </body>
-    </html>
+    <main>
+      <h1>Something went wrong</h1>
+    </main>
   );
 }
