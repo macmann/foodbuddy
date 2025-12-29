@@ -1,7 +1,9 @@
 import "./globals.css";
 
 import type { Metadata } from "next";
-import Providers from "./providers";
+import ClientRoot from "./client-root";
+
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "FoodBuddy",
@@ -12,7 +14,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
-        <Providers>{children}</Providers>
+        <ClientRoot>{children}</ClientRoot>
       </body>
     </html>
   );
