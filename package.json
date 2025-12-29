@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "next dev",
     "prebuild": "node scripts/guard-no-pages-router.mjs",
-    "build": "NODE_ENV=production next build",
-    "start": "next start -p $PORT",
+    "build": "next build",
+    "start": "bash scripts/render-start.sh",
     "lint": "next lint",
+    "postinstall": "prisma generate",
+    "migrate:deploy": "prisma migrate deploy",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
