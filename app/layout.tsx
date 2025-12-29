@@ -1,11 +1,11 @@
-import './globals.css';
+import "./globals.css";
 
-import type { Metadata } from 'next';
-import { Providers } from './providers';
+import type { Metadata } from "next";
+import Providers from "./providers";
 
 export const metadata: Metadata = {
-  title: 'FoodBuddy',
-  description: 'FoodBuddy starter app',
+  title: "FoodBuddy",
+  description: "FoodBuddy starter app",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
