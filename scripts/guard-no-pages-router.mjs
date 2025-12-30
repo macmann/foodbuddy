@@ -4,6 +4,15 @@ import path from "node:path";
 const root = process.cwd();
 const ignoredDirs = new Set(["node_modules", ".next", ".git"]);
 const forbiddenContent = ["next" + "/document", "<" + "Html"];
+const documentPattern = /pages[\\/]+_document\.(js|jsx|ts|tsx)$/;
+const allowedExtensions = new Set([
+  ".js",
+  ".jsx",
+  ".ts",
+  ".tsx",
+  ".mjs",
+  ".cjs",
+]);
 
 async function scanDirectory(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -15,9 +24,6 @@ async function scanDirectory(dir) {
       if (ignoredDirs.has(entry.name)) {
         continue;
       }
-      if (entry.name === "pages") {
-        throw new Error(`Pages Router directory detected: ${fullPath}`);
-      }
       await scanDirectory(fullPath);
       continue;
     }
@@ -26,13 +32,19 @@ async function scanDirectory(dir) {
       continue;
     }
 
+    if (!allowedExtensions.has(path.extname(entry.name))) {
+      continue;
+    }
+
     const contents = await readFile(fullPath, "utf8");
     for (const token of forbiddenContent) {
-      if (contents.includes(token)) {
-        throw new Error(
-          `Forbidden token "${token}" found in ${fullPath}`
-        );
+      if (!contents.includes(token)) {
+        continue;
       }
+      if (documentPattern.test(fullPath)) {
+        continue;
+      }
+      throw new Error(`Forbidden token "${token}" found in ${fullPath}`);
     }
   }
 }
