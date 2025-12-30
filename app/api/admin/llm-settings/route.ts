@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "../../../../lib/db";
+import { normalizeModel } from "../../../../lib/agent/model";
 import {
   LLM_MODEL_ALLOWLIST,
   LLM_SETTINGS_DEFAULTS,
@@ -16,7 +17,7 @@ export const GET = async () => {
 
   if (record) {
     return NextResponse.json({
-      model: record.model,
+      model: normalizeModel(record.model),
       systemPrompt: record.systemPrompt,
       temperature: record.temperature,
       maxTokens: record.maxTokens,
@@ -63,8 +64,9 @@ export const PUT = async (request: Request) => {
   const systemPrompt = payload.systemPrompt ?? "";
   const temperature = payload.temperature;
   const maxTokens = payload.maxTokens;
+  const normalizedModel = normalizeModel(model);
 
-  if (!model || !isAllowedModel(model)) {
+  if (!model || normalizedModel !== model || !isAllowedModel(model)) {
     return NextResponse.json({ error: "Invalid model" }, { status: 400 });
   }
 
