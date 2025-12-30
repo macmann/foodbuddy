@@ -56,7 +56,7 @@ export class GoogleApiProvider implements PlacesProvider {
 
       if (data.status !== "OK" || !data.results?.length) {
         logger.error(
-          { status: data.status, error: data.error_message },
+          { status: data.status, err: data.error_message },
           "Google geocode request failed",
         );
         return null;
@@ -68,8 +68,8 @@ export class GoogleApiProvider implements PlacesProvider {
       }
 
       return { lat: location.lat, lng: location.lng };
-    } catch (error) {
-      logger.error({ error }, "Google geocode request threw an error");
+    } catch (err) {
+      logger.error({ err }, "Google geocode request threw an error");
       return null;
     }
   }
@@ -92,7 +92,7 @@ export class GoogleApiProvider implements PlacesProvider {
 
       if (data.status !== "OK" || !data.results) {
         logger.error(
-          { status: data.status, error: data.error_message },
+          { status: data.status, err: data.error_message },
           "Google nearby search failed",
         );
         return [];
@@ -101,8 +101,8 @@ export class GoogleApiProvider implements PlacesProvider {
       return data.results
         .map((result) => normalizePlaceResult(result))
         .filter((result): result is PlaceCandidate => result !== null);
-    } catch (error) {
-      logger.error({ error }, "Google nearby search threw an error");
+    } catch (err) {
+      logger.error({ err }, "Google nearby search threw an error");
       return [];
     }
   }
@@ -119,15 +119,15 @@ export class GoogleApiProvider implements PlacesProvider {
 
       if (data.status !== "OK" || !data.result) {
         logger.error(
-          { status: data.status, error: data.error_message },
+          { status: data.status, err: data.error_message },
           "Google place details failed",
         );
         return null;
       }
 
       return normalizePlaceResult(data.result);
-    } catch (error) {
-      logger.error({ error }, "Google place details threw an error");
+    } catch (err) {
+      logger.error({ err }, "Google place details threw an error");
       return null;
     }
   }

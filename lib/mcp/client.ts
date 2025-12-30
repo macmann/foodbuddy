@@ -75,10 +75,10 @@ export const mcpCall = async <T>({
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
-  } catch (error) {
-    logger.error({ error, method, requestId, url }, "MCP request failed to send");
-    if (error instanceof Error) {
-      throw error;
+  } catch (err) {
+    logger.error({ err, method, requestId, url }, "MCP request failed to send");
+    if (err instanceof Error) {
+      throw err;
     }
     throw new Error("MCP request failed to send");
   } finally {
@@ -103,13 +103,13 @@ export const mcpCall = async <T>({
   let data: JsonRpcResponse<T> | null = null;
   try {
     data = (await response.json()) as JsonRpcResponse<T>;
-  } catch (error) {
-    logger.error({ error, method, requestId }, "MCP response JSON parse failed");
+  } catch (err) {
+    logger.error({ err, method, requestId }, "MCP response JSON parse failed");
     throw new Error("MCP response parse failed");
   }
 
   if (data?.error) {
-    logger.error({ error: data.error, method, requestId }, "MCP response error");
+    logger.error({ err: data.error, method, requestId }, "MCP response error");
     throw new Error(data.error.message ?? "MCP response error");
   }
 

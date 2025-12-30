@@ -34,8 +34,8 @@ export async function GET() {
         inputSchema: tool.inputSchema,
       })),
     });
-  } catch (error) {
-    logger.error({ error }, "Failed to list MCP tools");
+  } catch (err) {
+    logger.error({ err }, "Failed to list MCP tools");
     return NextResponse.json({ error: "Failed to list MCP tools" }, { status: 502 });
   }
 }

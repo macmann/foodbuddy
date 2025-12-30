@@ -215,8 +215,8 @@ export async function POST(request: Request) {
       location: { lat: locationState.lastLat, lng: locationState.lastLng },
       queryText: text,
     });
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : "Unknown error";
     await writeRecommendationEvent(
       {
         channel: "TELEGRAM",
@@ -233,7 +233,7 @@ export async function POST(request: Request) {
         parsedConstraints,
       },
     );
-    logger.error({ error }, "Failed to recommend places for telegram");
+    logger.error({ err }, "Failed to recommend places for telegram");
     await sendTelegramMessage(chatId, "Something went wrong. Please try again.");
     return respond(200, { ok: true });
   }
