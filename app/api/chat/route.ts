@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { hashUserId } from "../../../lib/hash";
-import { getPlacesProvider } from "../../../lib/places";
 import { logger } from "../../../lib/logger";
 import { createRequestContext } from "../../../lib/request";
 import { rateLimit } from "../../../lib/rateLimit";
 import { parseQuery, recommend, writeRecommendationEvent } from "../../../lib/reco/engine";
+import { runFoodBuddyAgent } from "../../../lib/agent/agent";
 import { haversineMeters } from "../../../lib/reco/scoring";
 
 const buildRecommendationPayload = (
@@ -59,9 +59,8 @@ export async function POST(request: Request) {
     return respond(400, { error: "Message too long" });
   }
 
-  const provider = getPlacesProvider();
   const userIdHash = hashUserId(body.anonId);
-  let location = body.location ?? null;
+  const location = body.location ?? null;
 
   const limiter = rateLimit(`chat:${userIdHash}`, 10, 60_000);
   if (!limiter.allowed) {
@@ -73,26 +72,108 @@ export async function POST(request: Request) {
     return response;
   }
 
-  if (!location && body.locationText) {
-    location = await provider.geocode(body.locationText);
+  try {
+    const agentStart = Date.now();
+    const agentResult = await runFoodBuddyAgent({
+      userMessage: body.message,
+      context: {
+        location,
+        locationText: body.locationText,
+        sessionId: body.sessionId,
+        requestId,
+        userIdHash,
+      },
+    });
+
+    const recommendations = [agentResult.primary, ...agentResult.alternatives].filter(
+      Boolean,
+    );
+
+    if (location) {
+      const parsedConstraints = parseQuery(body.message);
+      await writeRecommendationEvent(
+        {
+          channel: "WEB",
+          userIdHash,
+          location,
+          queryText: body.message,
+        },
+        {
+          status: recommendations.length === 0 ? "NO_RESULTS" : "OK",
+          latencyMs: Date.now() - agentStart,
+          resultCount: recommendations.length,
+          recommendedPlaceIds: recommendations.map((item) => item!.placeId),
+          parsedConstraints,
+        },
+      );
+    }
+
+    logger.info(
+      { ...logContext, latencyMs: Date.now() - agentStart },
+      "Agent response complete",
+    );
+
+    return respond(200, {
+      primary: agentResult.primary,
+      alternatives: agentResult.alternatives,
+      message: agentResult.message,
+    });
+  } catch (err) {
+    logger.error({ err, ...logContext }, "Agent failed; falling back to recommendations");
   }
 
   if (!location) {
-    return respond(400, { error: "Location is required" });
+    return respond(200, {
+      primary: null,
+      alternatives: [],
+      message: "Please share a location so I can find nearby places.",
+    });
   }
 
   const recommendationStart = Date.now();
   const parsedConstraints = parseQuery(body.message);
-  let recommendation;
   try {
-    recommendation = await recommend({
+    const recommendation = await recommend({
       channel: "WEB",
       userIdHash,
       location,
       queryText: body.message,
     });
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : "Unknown error";
+
+    const payload = buildRecommendationPayload(recommendation, location);
+    const [primary, ...alternatives] = payload;
+    const recommendedPlaceIds = payload.map((item) => item.placeId);
+    const resultCount = payload.length;
+    const status = resultCount === 0 ? "NO_RESULTS" : "OK";
+
+    await writeRecommendationEvent(
+      {
+        channel: "WEB",
+        userIdHash,
+        location,
+        queryText: body.message,
+      },
+      {
+        status,
+        latencyMs: Date.now() - recommendationStart,
+        resultCount,
+        recommendedPlaceIds,
+        parsedConstraints,
+      },
+    );
+
+    const message = recommendation.primary
+      ? "Here are a few spots you might like."
+      : "Sorry, I couldn't find any places for that query.";
+
+    return respond(200, {
+      primary: primary ?? null,
+      alternatives,
+      message,
+    });
+  } catch (fallbackError) {
+    const errorMessage =
+      fallbackError instanceof Error ? fallbackError.message : "Unknown error";
     await writeRecommendationEvent(
       {
         channel: "WEB",
@@ -109,39 +190,11 @@ export async function POST(request: Request) {
         parsedConstraints,
       },
     );
-    logger.error({ err, ...logContext }, "Failed to generate recommendations");
-    return respond(500, { error: "Failed to generate recommendations" });
+    logger.error({ err: fallbackError, ...logContext }, "Failed fallback recommendations");
+    return respond(200, {
+      primary: null,
+      alternatives: [],
+      message: "Sorry, something went wrong while finding places.",
+    });
   }
-
-  const payload = buildRecommendationPayload(recommendation, location);
-  const [primary, ...alternatives] = payload;
-  const recommendedPlaceIds = payload.map((item) => item.placeId);
-  const resultCount = payload.length;
-  const status = resultCount === 0 ? "NO_RESULTS" : "OK";
-
-  await writeRecommendationEvent(
-    {
-      channel: "WEB",
-      userIdHash,
-      location,
-      queryText: body.message,
-    },
-    {
-      status,
-      latencyMs: Date.now() - recommendationStart,
-      resultCount,
-      recommendedPlaceIds,
-      parsedConstraints,
-    },
-  );
-
-  const message = recommendation.primary
-    ? "Here are a few spots you might like."
-    : "Sorry, I couldn't find any places for that query.";
-
-  return respond(200, {
-    primary: primary ?? null,
-    alternatives,
-    message,
-  });
 }
