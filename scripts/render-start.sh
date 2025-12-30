@@ -22,5 +22,24 @@ export NODE_OPTIONS="--unhandled-rejections=strict -r ./scripts/register-process
 export HOSTNAME="0.0.0.0"
 export PORT="${PORT:-10000}"
 
+echo "Checking static asset paths..."
+if [[ -d ".next/static" ]]; then
+  echo "Found .next/static"
+else
+  echo "Missing .next/static"
+fi
+
+if [[ -d ".next/standalone/.next/static" ]]; then
+  echo "Found .next/standalone/.next/static"
+else
+  echo "Missing .next/standalone/.next/static"
+fi
+
+if [[ -d "public" ]]; then
+  echo "Found public"
+else
+  echo "Missing public"
+fi
+
 echo "Starting standalone server on ${HOSTNAME}:${PORT}..."
 node .next/standalone/server.js
