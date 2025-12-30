@@ -54,6 +54,14 @@ npm run db:generate
 npm run db:migrate
 ```
 
+If you need to resolve a failed migration, set `DATABASE_URL` and run the rollback + deploy commands:
+
+```bash
+export DATABASE_URL="postgresql://user:password@host:5432/dbname"
+npm run db:resolve:failed
+npm run db:deploy
+```
+
 ## Running Locally
 
 Start the development server:

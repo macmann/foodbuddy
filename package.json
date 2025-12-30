@@ -13,6 +13,7 @@
     "migrate:deploy": "prisma migrate deploy",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
+    "db:resolve:failed": "prisma migrate resolve --rolled-back 20250115000100_add_recommendation_metadata",
     "db:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio"
   },
