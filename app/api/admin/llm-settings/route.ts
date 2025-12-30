@@ -1,14 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "../../../../lib/db";
-import { normalizeModel } from "../../../../lib/agent/model";
-import {
-  LLM_MODEL_ALLOWLIST,
-  LLM_SETTINGS_DEFAULTS,
-  resetLLMSettingsCache,
-} from "../../../../lib/settings/llm";
-
-const isAllowedModel = (model: string) =>
-  LLM_MODEL_ALLOWLIST.includes(model as (typeof LLM_MODEL_ALLOWLIST)[number]);
+import { isAllowedModel } from "../../../../lib/agent/model";
+import { LLM_SETTINGS_DEFAULTS, resetLLMSettingsCache } from "../../../../lib/settings/llm";
 
 export const GET = async () => {
   const record = await prisma.lLMSettings.findUnique({
@@ -17,7 +10,7 @@ export const GET = async () => {
 
   if (record) {
     return NextResponse.json({
-      model: normalizeModel(record.model),
+      model: record.model,
       systemPrompt: record.systemPrompt,
       temperature: record.temperature,
       maxTokens: record.maxTokens,
@@ -60,14 +53,15 @@ export const PUT = async (request: Request) => {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const model = payload.model?.trim();
+  const model = payload.model;
   const systemPrompt = payload.systemPrompt ?? "";
   const temperature = payload.temperature;
   const maxTokens = payload.maxTokens;
-  const normalizedModel = normalizeModel(model);
-
-  if (!model || normalizedModel !== model || !isAllowedModel(model)) {
-    return NextResponse.json({ error: "Invalid model" }, { status: 400 });
+  if (!model || !isAllowedModel(model)) {
+    return NextResponse.json(
+      { error: "Invalid model. Allowed: gpt-5-mini, gpt-5.2" },
+      { status: 400 },
+    );
   }
 
   if (typeof systemPrompt !== "string" || systemPrompt.length > 10_000) {

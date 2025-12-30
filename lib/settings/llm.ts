@@ -1,8 +1,7 @@
 import { prisma } from "../db";
 import { logger } from "../logger";
-import { ALLOWED_MODELS } from "../agent/model";
+import { ALLOWED_MODELS, DEFAULT_MODEL, isAllowedModel } from "../agent/model";
 
-const DEFAULT_MODEL = "gpt-5-mini";
 const DEFAULT_SYSTEM_PROMPT = `You are FoodBuddy, a helpful local food assistant.
 
 Your responsibilities:
@@ -45,7 +44,7 @@ const normalizeSettings = (settings?: Partial<LLMSettingsValue>): LLMSettingsVal
       ? Math.round(clamp(settings.maxTokens, 100, 2000))
       : DEFAULT_MAX_TOKENS;
 
-  if (!ALLOWED_MODELS.includes(model as (typeof ALLOWED_MODELS)[number])) {
+  if (!isAllowedModel(model)) {
     logger.error({ model }, "Invalid LLM model configured; using default");
     return {
       model: DEFAULT_MODEL,

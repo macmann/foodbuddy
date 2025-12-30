@@ -66,13 +66,11 @@ export const callLLM = async ({
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const start = Date.now();
-  const requestedModel = settings.model;
-  const normalizedModel = normalizeModel(requestedModel);
-  const trimmedRequested = requestedModel?.trim() ?? "";
+  const model = normalizeModel(settings.model);
 
-  if (normalizedModel !== trimmedRequested) {
+  if (model !== settings.model) {
     logger.warn(
-      { requestedModel, normalizedModel },
+      { requestedModel: settings.model, modelUsed: model },
       "Invalid model requested; falling back",
     );
   }
@@ -90,7 +88,7 @@ export const callLLM = async ({
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: normalizedModel,
+        model,
         temperature: settings.temperature,
         max_output_tokens: settings.maxTokens,
         tool_choice: "auto",
