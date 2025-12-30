@@ -1,4 +1,5 @@
 import { logger } from "../logger";
+import { extractJsonFromSse, isLikelySse } from "./sseParser";
 import type { JsonRpcResponse } from "./types";
 
 type McpCallOptions = {
@@ -100,17 +101,46 @@ export const mcpCall = async <T>({
     return null;
   }
 
+  const contentType = response.headers.get("content-type") ?? "";
+  const responseText = await response.text();
+
   let data: JsonRpcResponse<T> | null = null;
   try {
-    data = (await response.json()) as JsonRpcResponse<T>;
+    if (isLikelySse(responseText, contentType)) {
+      data = extractJsonFromSse(responseText) as JsonRpcResponse<T>;
+    } else {
+      data = JSON.parse(responseText) as JsonRpcResponse<T>;
+    }
   } catch (err) {
-    logger.error({ err, method, requestId }, "MCP response JSON parse failed");
+    logger.error(
+      {
+        err,
+        method,
+        requestId,
+        contentType,
+        snippet: responseText.slice(0, 200),
+      },
+      "MCP response parse failed",
+    );
+    if (err instanceof Error) {
+      throw new Error(err.message);
+    }
     throw new Error("MCP response parse failed");
+  }
+
+  if (!data || typeof data !== "object") {
+    logger.error(
+      { method, requestId, contentType, snippet: responseText.slice(0, 200) },
+      "MCP response invalid payload",
+    );
+    throw new Error("MCP response invalid payload");
   }
 
   if (data?.error) {
     logger.error({ err: data.error, method, requestId }, "MCP response error");
-    throw new Error(data.error.message ?? "MCP response error");
+    const rpcError = new Error(data.error.message ?? "MCP response error");
+    (rpcError as Error & { code?: number }).code = data.error.code;
+    throw rpcError;
   }
 
   if (!data || !("result" in data)) {
