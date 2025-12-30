@@ -30,12 +30,17 @@ type LlmResponse = {
 type CallLlmInput = {
   messages: LlmMessage[];
   tools?: ToolSchema[];
+  settings: {
+    model: string;
+    systemPrompt: string;
+    temperature: number;
+    maxTokens: number;
+  };
   requestId?: string;
   timeoutMs?: number;
 };
 
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1";
-const MODEL = "gpt-5.2-mini";
 const DEFAULT_TIMEOUT_MS = 12_000;
 
 const parseToolArguments = (raw: unknown): Record<string, unknown> => {
@@ -57,6 +62,7 @@ const parseToolArguments = (raw: unknown): Record<string, unknown> => {
 export const callLLM = async ({
   messages,
   tools,
+  settings,
   requestId,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 }: CallLlmInput): Promise<LlmResponse> => {
@@ -68,6 +74,11 @@ export const callLLM = async ({
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const start = Date.now();
 
+  const input =
+    messages[0]?.role === "system"
+      ? messages
+      : [{ role: "system", content: settings.systemPrompt }, ...messages];
+
   try {
     const response = await fetch(`${OPENAI_BASE_URL}/responses`, {
       method: "POST",
@@ -76,12 +87,12 @@ export const callLLM = async ({
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: MODEL,
-        temperature: 0.3,
-        max_output_tokens: 800,
+        model: settings.model,
+        temperature: settings.temperature,
+        max_output_tokens: settings.maxTokens,
         tool_choice: "auto",
         tools,
-        input: messages,
+        input,
       }),
       signal: controller.signal,
     });

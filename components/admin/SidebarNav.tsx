@@ -11,6 +11,7 @@ const navItems = [
   { label: "Feedback", href: "/admin/feedback" },
   { label: "System Health", href: "/admin/health" },
   { label: "Settings", href: "/admin/settings" },
+  { label: "LLM Settings", href: "/admin/settings/llm" },
 ];
 
 type SidebarNavProps = {

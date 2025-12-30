@@ -119,6 +119,25 @@ const sampleFeedback = [
   },
 ];
 
+const llmDefaults = {
+  id: "default",
+  model: "gpt-5.2-mini",
+  temperature: 0.3,
+  maxTokens: 800,
+  systemPrompt: `You are FoodBuddy, a helpful local food assistant.
+
+Your responsibilities:
+- Understand natural language food requests
+- Ask for location if missing
+- Use tools to find real nearby places
+- Explain results conversationally
+
+Rules:
+- Do not hallucinate places
+- Use tools for factual data
+- Ask clarifying questions when needed`,
+};
+
 const recalculateAggregate = async (placeId: string) => {
   const feedback = await prisma.placeFeedback.findMany({
     where: { placeId, moderationStatus: "ACTIVE" },
@@ -164,6 +183,17 @@ const recalculateAggregate = async (placeId: string) => {
 };
 
 async function main() {
+  await prisma.lLMSettings.upsert({
+    where: { id: "default" },
+    update: {
+      model: llmDefaults.model,
+      temperature: llmDefaults.temperature,
+      maxTokens: llmDefaults.maxTokens,
+      systemPrompt: llmDefaults.systemPrompt,
+    },
+    create: llmDefaults,
+  });
+
   await Promise.all(
     samplePlaces.map((place) =>
       prisma.place.upsert({

@@ -100,3 +100,12 @@ model RagDocument {
   embedding Unsupported("vector")
   updatedAt DateTime @updatedAt
 }
+
+model LLMSettings {
+  id           String   @id @default("default")
+  model        String
+  systemPrompt String
+  temperature  Float    @default(0.3)
+  maxTokens    Int      @default(800)
+  updatedAt    DateTime @updatedAt
+}

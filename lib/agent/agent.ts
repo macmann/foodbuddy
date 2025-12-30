@@ -1,5 +1,6 @@
 import { logger } from "../logger";
 import type { RecommendationCardData } from "../types";
+import { getLLMSettings } from "../settings/llm";
 import { callLLM, type LlmMessage } from "./llm";
 import { extractRecommendations, toolHandlers, toolSchemas } from "./tools";
 
@@ -18,13 +19,6 @@ export type AgentResult = {
   alternatives: RecommendationCardData[];
 };
 
-const SYSTEM_PROMPT = `You are FoodBuddy, a local food recommendation assistant.
-You understand natural language requests about food and places.
-If a location is missing, ask a clarifying question to get it.
-Prefer using nearby_search when you have a location.
-Use tools only when needed to answer accurately.
-Respond conversationally and concisely.`;
-
 export const runFoodBuddyAgent = async ({
   userMessage,
   context,
@@ -32,7 +26,15 @@ export const runFoodBuddyAgent = async ({
   userMessage: string;
   context: AgentContext;
 }): Promise<AgentResult> => {
-  const messages: LlmMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
+  const settings = await getLLMSettings();
+  if (settings.isFallback) {
+    logger.error(
+      { requestId: context.requestId },
+      "Invalid LLM settings detected; falling back to internal recommendations",
+    );
+    throw new Error("Invalid LLM settings");
+  }
+  const messages: LlmMessage[] = [{ role: "system", content: settings.systemPrompt }];
 
   if (context.locationText) {
     messages.push({
@@ -56,11 +58,18 @@ export const runFoodBuddyAgent = async ({
 
   messages.push({ role: "user", content: userMessage });
 
-  const initialResponse = await callLLM({
-    messages,
-    tools: toolSchemas,
-    requestId: context.requestId,
-  });
+  let initialResponse: Awaited<ReturnType<typeof callLLM>>;
+  try {
+    initialResponse = await callLLM({
+      messages,
+      tools: toolSchemas,
+      settings,
+      requestId: context.requestId,
+    });
+  } catch (err) {
+    logger.error({ err, requestId: context.requestId }, "LLM call failed");
+    throw err;
+  }
 
   if (initialResponse.toolCalls.length === 0) {
     return {
@@ -77,15 +86,24 @@ export const runFoodBuddyAgent = async ({
   for (const toolCall of initialResponse.toolCalls) {
     const handler = toolHandlers[toolCall.name];
     if (!handler) {
-      logger.warn({ tool: toolCall.name }, "No handler for tool call");
+      logger.warn({ tool: toolCall.name, requestId: context.requestId }, "No handler for tool call");
       continue;
     }
 
-    const result = await handler(toolCall.arguments, {
-      location: context.location,
-      requestId: context.requestId,
-      userIdHash: context.userIdHash,
-    });
+    let result: Record<string, unknown>;
+    try {
+      result = await handler(toolCall.arguments, {
+        location: context.location,
+        requestId: context.requestId,
+        userIdHash: context.userIdHash,
+      });
+    } catch (err) {
+      logger.error(
+        { err, tool: toolCall.name, requestId: context.requestId },
+        "Tool execution failed",
+      );
+      throw err;
+    }
 
     if (!primary && alternatives.length === 0) {
       const extracted = extractRecommendations(toolCall.name, result);
@@ -101,11 +119,18 @@ export const runFoodBuddyAgent = async ({
     });
   }
 
-  const finalResponse = await callLLM({
-    messages: [...messages, ...toolMessages],
-    tools: toolSchemas,
-    requestId: context.requestId,
-  });
+  let finalResponse: Awaited<ReturnType<typeof callLLM>>;
+  try {
+    finalResponse = await callLLM({
+      messages: [...messages, ...toolMessages],
+      tools: toolSchemas,
+      settings,
+      requestId: context.requestId,
+    });
+  } catch (err) {
+    logger.error({ err, requestId: context.requestId }, "LLM call failed");
+    throw err;
+  }
 
   return {
     message:
