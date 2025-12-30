@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { DEFAULT_MODEL, isAllowedModel } from "../../../../lib/agent/model";
 
 const MODEL_OPTIONS = [
   { value: "gpt-5-mini", label: "GPT-5 mini" },
@@ -34,6 +35,7 @@ export default function AdminLLMSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<ToastState>(null);
+  const [modelWarning, setModelWarning] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,7 +50,13 @@ export default function AdminLLMSettingsPage() {
         }
         const data = (await response.json()) as LLMSettingsResponse;
         if (!cancelled) {
-          setSettings(data);
+          if (!isAllowedModel(data.model)) {
+            setModelWarning("Invalid model detected. Defaulting to GPT-5 mini.");
+            setSettings({ ...data, model: DEFAULT_MODEL });
+          } else {
+            setModelWarning(null);
+            setSettings(data);
+          }
         }
       } catch (error) {
         if (!cancelled) {
@@ -108,14 +116,26 @@ export default function AdminLLMSettingsPage() {
       });
 
       if (!response.ok) {
-        throw new Error("Failed to save");
+        let message = "Failed to save LLM settings.";
+        try {
+          const errorData = (await response.json()) as { error?: string };
+          if (errorData.error) {
+            message = errorData.error;
+          }
+        } catch {
+          // ignore parsing errors
+        }
+        throw new Error(message);
       }
 
       const data = (await response.json()) as LLMSettingsResponse;
       setSettings(data);
+      setModelWarning(null);
       setToast({ tone: "success", message: "LLM settings saved." });
     } catch (error) {
-      setToast({ tone: "error", message: "Failed to save LLM settings." });
+      const message =
+        error instanceof Error ? error.message : "Failed to save LLM settings.";
+      setToast({ tone: "error", message });
     } finally {
       setSaving(false);
     }
@@ -154,7 +174,10 @@ export default function AdminLLMSettingsPage() {
                 </span>
                 <select
                   value={settings.model}
-                  onChange={(event) => updateSettings("model", event.target.value)}
+                  onChange={(event) => {
+                    setModelWarning(null);
+                    updateSettings("model", event.target.value);
+                  }}
                   className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
                 >
                   {MODEL_OPTIONS.map((option) => (
@@ -163,6 +186,9 @@ export default function AdminLLMSettingsPage() {
                     </option>
                   ))}
                 </select>
+                {modelWarning ? (
+                  <span className="text-xs text-amber-300">{modelWarning}</span>
+                ) : null}
               </label>
 
               <label className="space-y-2 text-sm text-slate-300">
