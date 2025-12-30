@@ -152,48 +152,42 @@ const geocodeLocation = async (
 export const toolSchemas: ToolSchema[] = [
   {
     type: "function",
-    function: {
-      name: "nearby_search",
-      description: "Find nearby food places based on user intent and location",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "The user's search intent." },
-          latitude: { type: "number", description: "Latitude of the user." },
-          longitude: { type: "number", description: "Longitude of the user." },
-          radius_m: { type: "number", description: "Search radius in meters." },
-        },
-        required: ["query"],
+    name: "nearby_search",
+    description: "Find nearby food places based on user intent and location",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The user's search intent." },
+        latitude: { type: "number", description: "Latitude of the user." },
+        longitude: { type: "number", description: "Longitude of the user." },
+        radius_m: { type: "number", description: "Search radius in meters." },
       },
+      required: ["query"],
     },
   },
   {
     type: "function",
-    function: {
-      name: "recommend_internal",
-      description: "Use FoodBuddy internal recommendation engine",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "The user's search query." },
-          location: { type: "string", description: "Location text if known." },
-        },
-        required: ["query"],
+    name: "recommend_internal",
+    description: "Use FoodBuddy internal recommendation engine",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The user's search query." },
+        location: { type: "string", description: "Location text if known." },
       },
+      required: ["query"],
     },
   },
   {
     type: "function",
-    function: {
-      name: "geocode_location",
-      description: "Convert a place name to lat/lng",
-      parameters: {
-        type: "object",
-        properties: {
-          place: { type: "string", description: "Place name or address." },
-        },
-        required: ["place"],
+    name: "geocode_location",
+    description: "Convert a place name to lat/lng",
+    parameters: {
+      type: "object",
+      properties: {
+        place: { type: "string", description: "Place name or address." },
       },
+      required: ["place"],
     },
   },
 ];
