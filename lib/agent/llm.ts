@@ -1,19 +1,11 @@
 import { logger } from "../logger";
+import type { ToolSchema } from "./types";
 
 export type LlmMessage = {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
   tool_name?: string;
   tool_call_id?: string;
-};
-
-type ToolSchema = {
-  type: "function";
-  function: {
-    name: string;
-    description?: string;
-    parameters: Record<string, unknown>;
-  };
 };
 
 type ToolCall = {
@@ -158,4 +150,4 @@ export const callLLM = async ({
   }
 };
 
-export type { ToolSchema, ToolCall, LlmResponse };
+export type { ToolCall, LlmResponse };

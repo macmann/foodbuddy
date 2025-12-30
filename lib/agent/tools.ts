@@ -4,19 +4,7 @@ import type { Coordinates, PlaceCandidate } from "../places";
 import { haversineMeters } from "../reco/scoring";
 import { parseQuery, recommend } from "../reco/engine";
 import type { RecommendationCardData } from "../types";
-
-export type ToolSchema = {
-  type: "function";
-  function: {
-    name: string;
-    description: string;
-    parameters: {
-      type: "object";
-      properties: Record<string, unknown>;
-      required?: string[];
-    };
-  };
-};
+import type { ToolSchema } from "./types";
 
 export type AgentToolContext = {
   location?: { lat: number; lng: number } | null;
@@ -266,5 +254,3 @@ export const extractRecommendations = (
 
   return { primary: null, alternatives: [] };
 };
-
-export type { ToolSchema } from "./llm";
