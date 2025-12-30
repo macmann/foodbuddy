@@ -18,5 +18,7 @@ if ! migrate_output=$(npx prisma migrate deploy 2>&1); then
   exit 1
 fi
 
+export NODE_OPTIONS="--unhandled-rejections=strict -r ./scripts/register-process-handlers.cjs"
+
 echo "Starting Next.js standalone server..."
-node .next/standalone/server.js
+npx next start -p "${PORT:-3000}" -H 0.0.0.0
