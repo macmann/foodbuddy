@@ -5,6 +5,19 @@ import { haversineMeters } from "../reco/scoring";
 import { parseQuery, recommend } from "../reco/engine";
 import type { RecommendationCardData } from "../types";
 
+export type ToolSchema = {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: {
+      type: "object";
+      properties: Record<string, unknown>;
+      required?: string[];
+    };
+  };
+};
+
 export type AgentToolContext = {
   location?: { lat: number; lng: number } | null;
   requestId?: string;
@@ -148,7 +161,7 @@ const geocodeLocation = async (
   return { coordinates: coords };
 };
 
-export const toolSchemas = [
+export const toolSchemas: ToolSchema[] = [
   {
     type: "function",
     function: {
