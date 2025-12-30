@@ -1,7 +1,8 @@
 import { prisma } from "../db";
 import { logger } from "../logger";
+import { ALLOWED_MODELS } from "../agent/model";
 
-const DEFAULT_MODEL = "gpt-5.2-mini";
+const DEFAULT_MODEL = "gpt-5-mini";
 const DEFAULT_SYSTEM_PROMPT = `You are FoodBuddy, a helpful local food assistant.
 
 Your responsibilities:
@@ -18,8 +19,6 @@ const DEFAULT_TEMPERATURE = 0.3;
 const DEFAULT_MAX_TOKENS = 800;
 
 const CACHE_TTL_MS = 45_000;
-
-const ALLOWED_MODELS = [DEFAULT_MODEL] as const;
 
 type LLMSettingsValue = {
   model: string;

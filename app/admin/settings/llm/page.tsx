@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-const MODEL_OPTIONS = ["gpt-5.2-mini"] as const;
+const MODEL_OPTIONS = [
+  { value: "gpt-5-mini", label: "GPT-5 mini" },
+  { value: "gpt-5.2", label: "GPT-5.2" },
+] as const;
 const PROMPT_MAX_LENGTH = 10_000;
 
 const formatTimestamp = (value?: string) => {
@@ -155,8 +158,8 @@ export default function AdminLLMSettingsPage() {
                   className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
                 >
                   {MODEL_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
+                    <option key={option.value} value={option.value}>
+                      {option.label}
                     </option>
                   ))}
                 </select>

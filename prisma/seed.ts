@@ -121,7 +121,7 @@ const sampleFeedback = [
 
 const llmDefaults = {
   id: "default",
-  model: "gpt-5.2-mini",
+  model: "gpt-5-mini",
   temperature: 0.3,
   maxTokens: 800,
   systemPrompt: `You are FoodBuddy, a helpful local food assistant.

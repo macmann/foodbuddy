@@ -1,4 +1,5 @@
 import { logger } from "../logger";
+import { normalizeModel } from "./model";
 import type { ToolSchema } from "./types";
 
 export type LlmMessage = {
@@ -65,6 +66,16 @@ export const callLLM = async ({
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const start = Date.now();
+  const requestedModel = settings.model;
+  const normalizedModel = normalizeModel(requestedModel);
+  const trimmedRequested = requestedModel?.trim() ?? "";
+
+  if (normalizedModel !== trimmedRequested) {
+    logger.warn(
+      { requestedModel, normalizedModel },
+      "Invalid model requested; falling back",
+    );
+  }
 
   const input =
     messages[0]?.role === "system"
@@ -79,7 +90,7 @@ export const callLLM = async ({
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: settings.model,
+        model: normalizedModel,
         temperature: settings.temperature,
         max_output_tokens: settings.maxTokens,
         tool_choice: "auto",
