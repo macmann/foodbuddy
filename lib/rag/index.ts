@@ -120,8 +120,8 @@ export const upsertRagDocForPlace = async (placeId: string) => {
       VALUES (${placeId}, ${content}, ${vectorLiteral}::vector, NOW())
       ON CONFLICT ("placeId") DO UPDATE SET "content" = EXCLUDED."content", "embedding" = EXCLUDED."embedding", "updatedAt" = NOW()`,
     );
-  } catch (error) {
-    logger.error({ error, placeId }, "Failed to upsert RAG document");
+  } catch (err) {
+    logger.error({ err, placeId }, "Failed to upsert RAG document");
   }
 };
 
@@ -153,8 +153,8 @@ export const getRagEnrichmentForPlaces = async (
         result.set(row.placeId, `Locals mention: ${mention}`);
       }
     });
-  } catch (error) {
-    logger.error({ error }, "Failed to fetch RAG enrichment");
+  } catch (err) {
+    logger.error({ err }, "Failed to fetch RAG enrichment");
   }
 
   return result;

@@ -91,8 +91,8 @@ export async function POST(request: Request) {
       location,
       queryText: body.message,
     });
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : "Unknown error";
     await writeRecommendationEvent(
       {
         channel: "WEB",
@@ -109,7 +109,7 @@ export async function POST(request: Request) {
         parsedConstraints,
       },
     );
-    logger.error({ error, ...logContext }, "Failed to generate recommendations");
+    logger.error({ err, ...logContext }, "Failed to generate recommendations");
     return respond(500, { error: "Failed to generate recommendations" });
   }
 

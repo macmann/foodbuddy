@@ -16,8 +16,8 @@ export class McpPlacesProvider implements PlacesProvider {
     try {
       const result = await this.call<Coordinates | null>("geocode", { text });
       return result ?? null;
-    } catch (error) {
-      logger.error({ error }, "MCP geocode failed");
+    } catch (err) {
+      logger.error({ err }, "MCP geocode failed");
       return null;
     }
   }
@@ -26,8 +26,8 @@ export class McpPlacesProvider implements PlacesProvider {
     try {
       const result = await this.call<PlaceCandidate[]>("nearbySearch", params);
       return Array.isArray(result) ? result : [];
-    } catch (error) {
-      logger.error({ error }, "MCP nearby search failed");
+    } catch (err) {
+      logger.error({ err }, "MCP nearby search failed");
       return [];
     }
   }
@@ -36,8 +36,8 @@ export class McpPlacesProvider implements PlacesProvider {
     try {
       const result = await this.call<PlaceDetails | null>("placeDetails", { placeId });
       return result ?? null;
-    } catch (error) {
-      logger.error({ error }, "MCP place details failed");
+    } catch (err) {
+      logger.error({ err }, "MCP place details failed");
       return null;
     }
   }
@@ -63,7 +63,7 @@ export class McpPlacesProvider implements PlacesProvider {
 
     const data = (await response.json()) as JsonRpcResponse<T>;
     if (data.error) {
-      logger.error({ error: data.error }, "MCP response error");
+      logger.error({ err: data.error }, "MCP response error");
       return null;
     }
 

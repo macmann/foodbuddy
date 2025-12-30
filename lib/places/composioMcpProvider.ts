@@ -220,8 +220,8 @@ export class ComposioMcpProvider implements PlacesProvider {
           (result as { formattedAddress?: string })?.formattedAddress,
         ),
       };
-    } catch (error) {
-      logger.error({ error, requestId }, "Composio MCP geocode failed");
+    } catch (err) {
+      logger.error({ err, requestId }, "Composio MCP geocode failed");
       return null;
     }
   }
@@ -234,8 +234,8 @@ export class ComposioMcpProvider implements PlacesProvider {
       const result = await this.callTool(tools.nearbySearch.name, args, requestId);
       const places = extractPlacesArray(result).map(normalizePlace).filter(Boolean) as PlaceCandidate[];
       return places.slice(0, 20);
-    } catch (error) {
-      logger.error({ error, requestId }, "Composio MCP nearby search failed");
+    } catch (err) {
+      logger.error({ err, requestId }, "Composio MCP nearby search failed");
       return [];
     }
   }
@@ -254,8 +254,8 @@ export class ComposioMcpProvider implements PlacesProvider {
       }
       const normalized = normalizePlace(payload as Record<string, unknown>);
       return normalized ? { ...normalized } : null;
-    } catch (error) {
-      logger.error({ error, requestId }, "Composio MCP place details failed");
+    } catch (err) {
+      logger.error({ err, requestId }, "Composio MCP place details failed");
       return null;
     }
   }
@@ -391,12 +391,12 @@ export class ComposioMcpProvider implements PlacesProvider {
 
     try {
       return await call();
-    } catch (error) {
-      const status = (error as Error & { status?: number }).status;
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status;
       const isRetryable =
         status !== undefined && RETRYABLE_STATUS.has(status)
           ? true
-          : ["AbortError", "TypeError"].includes((error as Error).name);
+          : ["AbortError", "TypeError"].includes((err as Error).name);
 
       if (isRetryable) {
         logger.warn({ requestId, status }, "Composio MCP call retrying once");
@@ -404,8 +404,8 @@ export class ComposioMcpProvider implements PlacesProvider {
         return call();
       }
 
-      logger.error({ error, requestId }, "Composio MCP call failed");
-      throw error;
+      logger.error({ err, requestId }, "Composio MCP call failed");
+      throw err;
     }
   }
 }
