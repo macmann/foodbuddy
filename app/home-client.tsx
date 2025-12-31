@@ -21,6 +21,10 @@ type ChatResponse = {
   message?: string;
 };
 
+const isRecommendationCard = (
+  value: RecommendationCardData | null | undefined,
+): value is RecommendationCardData => value != null;
+
 const createId = () => crypto.randomUUID();
 
 const PLACEHOLDER_OPTIONS = [
@@ -184,9 +188,10 @@ export default function HomePageClient() {
       }
 
       const data = (await response.json()) as ChatResponse;
-      const combined = (data.places ?? [])
-        .concat([data.primary, ...(data.alternatives ?? [])])
-        .filter((item): item is RecommendationCardData => Boolean(item));
+      const extras = [data.primary, ...(data.alternatives ?? [])].filter(
+        isRecommendationCard,
+      );
+      const combined = (data.places ?? []).concat(extras);
       const seen = new Set<string>();
       const recommendations = combined.filter((item) => {
         if (seen.has(item.placeId)) {
