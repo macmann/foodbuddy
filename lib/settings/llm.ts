@@ -48,8 +48,9 @@ const normalizeSettings = (settings?: Partial<LLMSettingsValue>): LLMSettingsVal
       ? settings.llmProvider.trim()
       : DEFAULT_PROVIDER;
   const llmModel = settings?.llmModel ?? DEFAULT_MODEL;
-  const hasPrompt = typeof settings?.llmSystemPrompt === "string";
-  const rawPrompt = hasPrompt ? settings.llmSystemPrompt : DEFAULT_SYSTEM_PROMPT;
+  const candidatePrompt =
+    typeof settings?.llmSystemPrompt === "string" ? settings.llmSystemPrompt.trim() : "";
+  const rawPrompt = candidatePrompt.length > 0 ? candidatePrompt : DEFAULT_SYSTEM_PROMPT;
   const llmSystemPrompt =
     rawPrompt.length <= MAX_PROMPT_LENGTH ? rawPrompt : DEFAULT_SYSTEM_PROMPT;
   const reasoningEffort =
