@@ -125,8 +125,9 @@ export async function POST(request: Request) {
     return response;
   }
 
+  let settings: Awaited<ReturnType<typeof getLLMSettings>> | undefined;
   try {
-    const settings = await getLLMSettings();
+    settings = await getLLMSettings();
 
     const llmModel = settings.llmModel;
     const hasSystemPrompt =
@@ -250,6 +251,22 @@ export async function POST(request: Request) {
       "Agent failed; falling back to recommendations",
     );
   }
+
+  const llmSettings = undefined;
+  const resolvedSettings = undefined;
+  const agentEnabled =
+    typeof (settings as any)?.agentEnabled === "boolean"
+      ? (settings as any).agentEnabled
+      : typeof (llmSettings as any)?.agentEnabled === "boolean"
+        ? (llmSettings as any).agentEnabled
+        : typeof (resolvedSettings as any)?.agentEnabled === "boolean"
+          ? (resolvedSettings as any).agentEnabled
+          : false;
+  const llmModel =
+    (settings as any)?.llmModel ??
+    (llmSettings as any)?.llmModel ??
+    (resolvedSettings as any)?.llmModel ??
+    null;
 
   if (!location) {
     logger.info({ ...logContext, path: "fallback" }, "Missing location for chat");
