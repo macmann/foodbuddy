@@ -7,6 +7,7 @@ import { parseQuery, recommend, writeRecommendationEvent } from "../../../lib/re
 import { runFoodBuddyAgent } from "../../../lib/agent/agent";
 import { haversineMeters } from "../../../lib/reco/scoring";
 import { getLLMSettings } from "../../../lib/settings/llm";
+import { isAllowedModel } from "../../../lib/agent/model";
 
 const buildRecommendationPayload = (
   result: Awaited<ReturnType<typeof recommend>>,
@@ -70,18 +71,27 @@ export async function POST(request: Request) {
     typeof body.latitude === "number" ? body.latitude : body.location?.lat;
   const longitude =
     typeof body.longitude === "number" ? body.longitude : body.location?.lng;
-  const location =
-    latitude != null && longitude != null ? { lat: latitude, lng: longitude } : null;
+  const hasCoordinates = latitude != null && longitude != null;
+  const location = hasCoordinates ? { lat: latitude, lng: longitude } : null;
   const locationEnabled = Boolean(body.locationEnabled);
   const locationText = body.neighborhood ?? body.locationText;
   const locale = request.headers.get("accept-language")?.split(",")[0];
+  const radius_m =
+    typeof body.radius_m === "number" && Number.isFinite(body.radius_m) && body.radius_m > 0
+      ? body.radius_m
+      : 1500;
+  const radius_defaulted =
+    locationEnabled &&
+    hasCoordinates &&
+    !(typeof body.radius_m === "number" && Number.isFinite(body.radius_m) && body.radius_m > 0);
 
   logger.info(
     {
       ...logContext,
       message: body.message,
-      hasCoordinates: latitude != null && longitude != null,
-      radius_m: body.radius_m ?? null,
+      hasCoordinates,
+      radius_m,
+      radius_defaulted: radius_defaulted || undefined,
       locationEnabled,
     },
     "Incoming chat request",
@@ -107,14 +117,36 @@ export async function POST(request: Request) {
   try {
     const settings = await getLLMSettings();
 
-    if (settings.llmEnabled) {
-      logger.info({ ...logContext, path: "llm_agent" }, "Routing chat to agent");
+    const llmModel = settings.llmModel;
+    const hasSystemPrompt =
+      typeof settings.llmSystemPrompt === "string" &&
+      settings.llmSystemPrompt.trim().length > 0;
+    const agentEnabled = settings?.llmEnabled === true;
+    const modelAllowed = isAllowedModel(llmModel);
+    let reason = "agent_success";
+
+    if (!agentEnabled) {
+      reason = "agent_disabled";
+    } else if (!llmModel) {
+      reason = "missing_model";
+    } else if (!modelAllowed) {
+      reason = "invalid_model";
+    } else if (!hasSystemPrompt) {
+      reason = "missing_prompt";
+    }
+
+    if (reason === "agent_success") {
+      logger.info(
+        { ...logContext, path: "llm_agent", agentEnabled, llmModel, hasSystemPrompt, reason },
+        "Routing chat to agent",
+      );
       const agentStart = Date.now();
       const agentResult = await runFoodBuddyAgent({
         userMessage: body.message,
         context: {
           location,
           locationText,
+          radius_m,
           sessionId: body.sessionId,
           requestId,
           userIdHash,
@@ -159,8 +191,28 @@ export async function POST(request: Request) {
         message: agentResult.message,
       });
     }
+
+    logger.info(
+      {
+        ...logContext,
+        path: "internal_recommend",
+        agentEnabled,
+        llmModel,
+        hasSystemPrompt,
+        reason,
+      },
+      "Routing chat to internal recommendations",
+    );
   } catch (err) {
-    logger.error({ err, ...logContext }, "Agent failed; falling back to recommendations");
+    logger.error(
+      {
+        err,
+        ...logContext,
+        path: "internal_recommend",
+        reason: "agent_failed_fallback",
+      },
+      "Agent failed; falling back to recommendations",
+    );
   }
 
   if (!location) {
