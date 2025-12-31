@@ -18,6 +18,12 @@ export type AgentMeta = {
   latencyMs?: number;
 };
 
+export type ChatResponseDebug = {
+  source: "llm_agent";
+  toolCallCount: number;
+  requestId: string;
+};
+
 export type ChatResponse = {
   message: string;
   status: "OK" | "NO_RESULTS" | "ERROR";
@@ -25,4 +31,5 @@ export type ChatResponse = {
   alternatives: RecommendationCardData[];
   places: RecommendationCardData[];
   meta: AgentMeta;
+  debug?: ChatResponseDebug;
 };
