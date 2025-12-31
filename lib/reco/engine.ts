@@ -40,6 +40,7 @@ type ParsedQuery = {
   radiusMeters: number;
   openNow: boolean;
   budget?: "cheap" | "mid" | "expensive";
+  llm?: unknown | null;
 };
 
 const DEFAULT_RADIUS_METERS = 1500;
