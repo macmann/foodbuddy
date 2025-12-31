@@ -49,7 +49,12 @@ export async function POST(request: Request) {
     sessionId: string;
     location?: { lat: number; lng: number };
     locationText?: string;
+    neighborhood?: string;
     message: string;
+    latitude?: number | null;
+    longitude?: number | null;
+    radius_m?: number | null;
+    locationEnabled?: boolean;
   };
 
   if (!body?.anonId || !body?.sessionId || !body?.message) {
@@ -61,8 +66,33 @@ export async function POST(request: Request) {
   }
 
   const userIdHash = hashUserId(body.anonId);
-  const location = body.location ?? null;
+  const latitude =
+    typeof body.latitude === "number" ? body.latitude : body.location?.lat;
+  const longitude =
+    typeof body.longitude === "number" ? body.longitude : body.location?.lng;
+  const location =
+    latitude != null && longitude != null ? { lat: latitude, lng: longitude } : null;
+  const locationEnabled = Boolean(body.locationEnabled);
+  const locationText = body.neighborhood ?? body.locationText;
   const locale = request.headers.get("accept-language")?.split(",")[0];
+
+  logger.info(
+    {
+      ...logContext,
+      message: body.message,
+      hasCoordinates: latitude != null && longitude != null,
+      radius_m: body.radius_m ?? null,
+      locationEnabled,
+    },
+    "Incoming chat request",
+  );
+
+  if (locationEnabled && (latitude == null || longitude == null)) {
+    return respond(400, {
+      error: "LOCATION_REQUIRED",
+      message: "Please share your location or set a neighborhood.",
+    });
+  }
 
   const limiter = rateLimit(`chat:${userIdHash}`, 10, 60_000);
   if (!limiter.allowed) {
@@ -78,12 +108,13 @@ export async function POST(request: Request) {
     const settings = await getLLMSettings();
 
     if (settings.llmEnabled) {
+      logger.info({ ...logContext, path: "llm_agent" }, "Routing chat to agent");
       const agentStart = Date.now();
       const agentResult = await runFoodBuddyAgent({
         userMessage: body.message,
         context: {
           location,
-          locationText: body.locationText,
+          locationText,
           sessionId: body.sessionId,
           requestId,
           userIdHash,
@@ -133,6 +164,7 @@ export async function POST(request: Request) {
   }
 
   if (!location) {
+    logger.info({ ...logContext, path: "fallback" }, "Missing location for chat");
     return respond(200, {
       primary: null,
       alternatives: [],
@@ -145,6 +177,10 @@ export async function POST(request: Request) {
   const recommendationStart = Date.now();
   const parsedConstraints = parseQuery(body.message);
   try {
+    logger.info(
+      { ...logContext, path: "internal_recommend" },
+      "Routing chat to internal recommendations",
+    );
     const recommendation = await recommend({
       channel: "WEB",
       userIdHash,

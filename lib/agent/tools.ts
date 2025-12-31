@@ -75,15 +75,40 @@ const nearbySearch = async (
   }
 
   const parsed = parseQuery(args.query);
-  const radiusMeters = args.radius_m ?? parsed.radiusMeters;
+  const initialRadiusMeters = args.radius_m ?? parsed.radiusMeters;
+  const retryRadii =
+    initialRadiusMeters <= 1000 ? [initialRadiusMeters, 3000, 8000] : [initialRadiusMeters];
 
-  const candidates = await provider.nearbySearch({
-    lat: latitude,
-    lng: longitude,
-    radiusMeters,
-    keyword: parsed.keyword,
-    openNow: parsed.openNow,
-  });
+  let candidates: PlaceCandidate[] = [];
+  let usedRadiusMeters = initialRadiusMeters;
+
+  for (let attempt = 0; attempt < retryRadii.length; attempt += 1) {
+    const radiusMeters = retryRadii[attempt];
+    usedRadiusMeters = radiusMeters;
+    candidates = await provider.nearbySearch({
+      lat: latitude,
+      lng: longitude,
+      radiusMeters,
+      keyword: parsed.keyword,
+      openNow: parsed.openNow,
+    });
+
+    logger.info(
+      {
+        requestId: context.requestId,
+        tool: "nearby_search",
+        count: candidates.length,
+        usedLat: latitude,
+        usedLng: longitude,
+        usedRadius: radiusMeters,
+      },
+      "Nearby search results",
+    );
+
+    if (candidates.length > 0) {
+      break;
+    }
+  }
 
   const normalized = candidates.map((candidate) =>
     normalizeCandidate(candidate, { lat: latitude, lng: longitude }),
@@ -91,6 +116,10 @@ const nearbySearch = async (
 
   return {
     results: normalized,
+    usedLatitude: latitude,
+    usedLongitude: longitude,
+    usedRadiusMeters,
+    exhausted: candidates.length === 0 && retryRadii.length > 1,
   };
 };
 
