@@ -22,7 +22,9 @@ const MAX_PROMPT_LENGTH = 10_000;
 
 const CACHE_TTL_MS = 45_000;
 
-export type ReasoningEffort = "none" | "medium" | "high" | "xhigh";
+const allowedReasoningEfforts = ["low", "medium", "high"] as const;
+
+export type ReasoningEffort = (typeof allowedReasoningEfforts)[number];
 export type Verbosity = "low" | "medium" | "high";
 
 type LLMSettingsValue = {
@@ -37,7 +39,6 @@ type LLMSettingsValue = {
 
 let cachedSettings: { value: LLMSettingsValue; expiresAt: number } | null = null;
 
-const allowedReasoningEfforts: ReasoningEffort[] = ["none", "medium", "high", "xhigh"];
 const allowedVerbosity: Verbosity[] = ["low", "medium", "high"];
 
 const normalizeSettings = (settings?: Partial<LLMSettingsValue>): LLMSettingsValue => {
@@ -98,14 +99,20 @@ export const getLLMSettings = async (): Promise<LLMSettingsValue> => {
       where: { id: "default" },
     });
 
-    const value = normalizeSettings({
-      llmEnabled: record?.llmEnabled ?? undefined,
-      llmProvider: record?.llmProvider ?? undefined,
-      llmModel: record?.llmModel ?? undefined,
-      llmSystemPrompt: record?.llmSystemPrompt ?? undefined,
-      reasoningEffort: record?.reasoningEffort ?? undefined,
-      verbosity: record?.verbosity ?? undefined,
-    });
+  const reasoningEffort =
+    typeof record?.reasoningEffort === "string" &&
+    allowedReasoningEfforts.includes(record.reasoningEffort as ReasoningEffort)
+      ? (record.reasoningEffort as ReasoningEffort)
+      : undefined;
+
+  const value = normalizeSettings({
+    llmEnabled: record?.llmEnabled ?? undefined,
+    llmProvider: record?.llmProvider ?? undefined,
+    llmModel: record?.llmModel ?? undefined,
+    llmSystemPrompt: record?.llmSystemPrompt ?? undefined,
+    reasoningEffort,
+    verbosity: record?.verbosity ?? undefined,
+  });
 
     cachedSettings = { value, expiresAt: now + CACHE_TTL_MS };
     return value;
