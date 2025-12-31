@@ -220,9 +220,20 @@ export default function HomePageClient() {
       }
 
       const data = (await response.json()) as ChatResponse;
-      const extras = [data.primary, ...(data.alternatives ?? [])].filter(
-        isRecommendationCard,
-      ) as RecommendationCardData[];
+      if (process.env.NEXT_PUBLIC_DEBUG === "true") {
+        console.log("Chat response", {
+          status: data.status,
+          message: data.message,
+          primary: Boolean(data.primary),
+          alternatives: data.alternatives?.length ?? 0,
+          places: data.places?.length ?? 0,
+          debug: data.debug,
+        });
+      }
+      const extras = [
+        ...(data.primary ? [data.primary] : []),
+        ...(data.alternatives ?? []),
+      ].filter(isRecommendationCard) as RecommendationCardData[];
       const combined = (data.places ?? []).concat(extras);
       const seen = new Set<string>();
       const recommendations = combined.filter((item) => {

@@ -8,7 +8,7 @@ import { runFoodBuddyAgent } from "../../../lib/agent/agent";
 import { haversineMeters } from "../../../lib/reco/scoring";
 import { getLLMSettings } from "../../../lib/settings/llm";
 import { isAllowedModel } from "../../../lib/agent/model";
-import type { ChatResponse } from "../../../lib/types/chat";
+import type { ChatResponse, RecommendationCardData } from "../../../lib/types/chat";
 
 const buildRecommendationPayload = (
   result: Awaited<ReturnType<typeof recommend>>,
@@ -35,6 +35,57 @@ const buildRecommendationPayload = (
   });
 };
 
+const buildAgentResponse = ({
+  agentMessage,
+  recommendations,
+  status,
+  toolCallCount,
+  requestId,
+  llmModel,
+  fallbackUsed,
+  latencyMs,
+}: {
+  agentMessage: string | null | undefined;
+  recommendations: RecommendationCardData[];
+  status?: ChatResponse["status"];
+  toolCallCount: number;
+  requestId: string;
+  llmModel?: string | null;
+  fallbackUsed?: boolean;
+  latencyMs: number;
+}): ChatResponse => {
+  const hasRecommendations = recommendations.length > 0;
+  const trimmedMessage = agentMessage?.trim();
+  const message =
+    trimmedMessage && trimmedMessage.length > 0
+      ? trimmedMessage
+      : hasRecommendations
+        ? "Here are a few places you might like."
+        : "Tell me a neighborhood or enable location so I can find nearby places.";
+  const primary = recommendations[0] ?? null;
+  const alternatives = recommendations.slice(1, 6);
+  const resolvedStatus = status ?? (hasRecommendations ? "OK" : "NO_RESULTS");
+  return {
+    message,
+    status: resolvedStatus,
+    primary,
+    alternatives,
+    places: recommendations,
+    meta: {
+      source: "agent",
+      toolCallCount,
+      llmModel: llmModel ?? undefined,
+      fallbackUsed,
+      latencyMs,
+    },
+    debug: {
+      source: "llm_agent",
+      toolCallCount,
+      requestId,
+    },
+  };
+};
+
 export async function POST(request: Request) {
   const { requestId, startTime } = createRequestContext(request);
   const channel = "WEB";
@@ -42,7 +93,17 @@ export async function POST(request: Request) {
   const respondChat = (status: number, payload: ChatResponse) => {
     const response = NextResponse.json(payload, { status });
     response.headers.set("x-request-id", requestId);
-    logger.info({ ...logContext, latencyMs: Date.now() - startTime }, "chat request complete");
+    logger.info(
+      {
+        ...logContext,
+        latencyMs: Date.now() - startTime,
+        responseKeys: Object.keys(payload),
+        primary: Boolean(payload.primary),
+        altCount: payload.alternatives?.length ?? 0,
+        placesCount: payload.places?.length ?? 0,
+      },
+      "Returning ChatResponse",
+    );
     return response;
   };
   const respondError = (status: number, payload: Record<string, unknown>) => {
@@ -148,6 +209,49 @@ export async function POST(request: Request) {
     }
 
     if (reason === "agent_success") {
+      if (!location && !locationText) {
+        const message =
+          "Tell me a neighborhood or enable location so I can find nearby places.";
+        await writeRecommendationEvent(
+          {
+            channel: "WEB",
+            userIdHash,
+            location: eventLocation,
+            queryText: body.message,
+            requestId,
+            locationEnabled,
+            radiusMeters,
+            source: "agent",
+            agentEnabled,
+            llmModel,
+            toolCallCount: 0,
+            fallbackUsed: false,
+            rawResponseJson: truncateJson(JSON.stringify({ message })),
+          },
+          {
+            status: "ERROR",
+            latencyMs: Date.now() - startTime,
+            errorMessage: "Missing location",
+            resultCount: 0,
+            recommendedPlaceIds: [],
+            parsedConstraints: parseQuery(body.message),
+          },
+        );
+        return respondChat(
+          200,
+          buildAgentResponse({
+            agentMessage: message,
+            recommendations: [],
+            status: "ERROR",
+            toolCallCount: 0,
+            requestId,
+            llmModel,
+            fallbackUsed: false,
+            latencyMs: Date.now() - startTime,
+          }),
+        );
+      }
+
       logger.info(
         { ...logContext, path: "llm_agent", agentEnabled, llmModel, hasSystemPrompt, reason },
         "Routing chat to agent",
@@ -167,7 +271,12 @@ export async function POST(request: Request) {
         },
       });
 
-      const recommendations = agentResult.places ?? [];
+      const recommendations =
+        agentResult.places && agentResult.places.length > 0
+          ? agentResult.places
+          : ([agentResult.primary, ...(agentResult.alternatives ?? [])].filter(
+              Boolean,
+            ) as RecommendationCardData[]);
       const resultCount = recommendations.length;
       const status = agentResult.status;
       const parsedConstraints = parseQuery(body.message);
@@ -188,7 +297,7 @@ export async function POST(request: Request) {
           queryText: body.message,
           requestId,
           locationEnabled,
-            radiusMeters,
+          radiusMeters,
           source: "agent",
           agentEnabled,
           llmModel,
@@ -213,20 +322,19 @@ export async function POST(request: Request) {
         "Agent response complete",
       );
 
-      return respondChat(200, {
-        message: agentResult.message,
-        status,
-        primary: agentResult.primary,
-        alternatives: agentResult.alternatives,
-        places: recommendations,
-        meta: {
-          source: "agent",
+      return respondChat(
+        200,
+        buildAgentResponse({
+          agentMessage: agentResult.message,
+          recommendations,
+          status,
           toolCallCount: agentResult.toolCallCount,
+          requestId,
           llmModel,
           fallbackUsed: agentResult.fallbackUsed,
           latencyMs: Date.now() - agentStart,
-        },
-      });
+        }),
+      );
     }
 
     logger.info(
