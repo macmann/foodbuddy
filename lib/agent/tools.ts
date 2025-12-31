@@ -11,6 +11,8 @@ export type AgentToolContext = {
   radius_m?: number;
   requestId?: string;
   userIdHash?: string;
+  rawMessage?: string;
+  locationEnabled?: boolean;
 };
 
 type NearbySearchArgs = {
@@ -86,13 +88,15 @@ const nearbySearch = async (
   for (let attempt = 0; attempt < retryRadii.length; attempt += 1) {
     const radiusMeters = retryRadii[attempt];
     usedRadiusMeters = radiusMeters;
-    candidates = await provider.nearbySearch({
+    const response = await provider.nearbySearch({
       lat: latitude,
       lng: longitude,
       radiusMeters,
       keyword: parsed.keyword,
       openNow: parsed.openNow,
+      requestId: context.requestId,
     });
+    candidates = response.results;
 
     logger.info(
       {
@@ -141,11 +145,42 @@ const recommendInternal = async (
     return { error: "Location is required for recommendations." };
   }
 
+  const parsed = parseQuery(args.query);
+  const initialRadiusMeters = context.radius_m ?? parsed.radiusMeters;
+  const envHasGoogleKey = Boolean(
+    process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_API_KEY,
+  );
+
+  logger.info(
+    {
+      requestId: context.requestId,
+      hasCoordinates: true,
+      lat: location.lat,
+      lng: location.lng,
+      radius_m: initialRadiusMeters,
+      keyword: parsed.keyword,
+      rawMessage: context.rawMessage ?? args.query,
+      locationEnabled: context.locationEnabled,
+      envHasGoogleKey,
+    },
+    "recommend_places request",
+  );
+
+  if (!envHasGoogleKey) {
+    return {
+      results: [],
+      places: [],
+      debug: { error: "Missing Google API key env var" },
+    };
+  }
+
   const response = await recommend({
     channel: "WEB",
     userIdHash: context.userIdHash ?? "unknown",
     location,
     queryText: args.query,
+    radiusMetersOverride: initialRadiusMeters,
+    requestId: context.requestId,
   });
 
   const normalized = [response.primary, ...response.alternatives]
@@ -167,6 +202,7 @@ const recommendInternal = async (
 
   return {
     results: normalized,
+    debug: response.debug,
   };
 };
 

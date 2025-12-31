@@ -10,6 +10,7 @@ export type AgentContext = {
   location?: { lat: number; lng: number } | null;
   locationText?: string;
   radius_m?: number;
+  locationEnabled?: boolean;
   sessionId?: string;
   requestId?: string;
   userIdHash?: string;
@@ -29,6 +30,7 @@ export type AgentResult = {
   fallbackUsed: boolean;
   rawResponse: Record<string, unknown>;
   parsedOutput?: ParsedAgentOutput;
+  toolDebug?: Record<string, unknown>;
 };
 
 const MAX_TOOL_ROUNDS = 3;
@@ -117,6 +119,7 @@ export const runFoodBuddyAgent = async ({
   let places: RecommendationCardData[] = [];
   let toolCallCount = 0;
   let fallbackUsed = false;
+  let toolDebug: Record<string, unknown> | undefined;
 
   let lastAssistantText = "";
   let clarificationMessage: string | null = null;
@@ -174,6 +177,8 @@ export const runFoodBuddyAgent = async ({
           radius_m: context.radius_m,
           requestId: context.requestId,
           userIdHash: context.userIdHash,
+          rawMessage: userMessage,
+          locationEnabled: context.locationEnabled,
         });
       } catch (err) {
         logger.error(
@@ -207,6 +212,13 @@ export const runFoodBuddyAgent = async ({
           const km = usedRadiusMeters / 1000;
           const kmLabel = Number.isInteger(km) ? km.toString() : km.toFixed(1);
           clarificationMessage = `I couldn’t find results within ${kmLabel} km. Want me to expand to 10 km or search a different neighborhood?`;
+        }
+      }
+
+      if (toolCall.name === "recommend_places") {
+        const debug = result.debug as Record<string, unknown> | undefined;
+        if (debug) {
+          toolDebug = debug;
         }
       }
 
@@ -278,6 +290,8 @@ export const runFoodBuddyAgent = async ({
         radius_m: context.radius_m,
         requestId: context.requestId,
         userIdHash: context.userIdHash,
+        rawMessage: userMessage,
+        locationEnabled: context.locationEnabled,
       },
     );
     const fallbackPlaces = extractPlaceResults("recommend_places", fallbackResult);
@@ -286,6 +300,10 @@ export const runFoodBuddyAgent = async ({
     alternatives = primary ? places.slice(1, MAX_RECOMMENDATIONS) : [];
     fallbackUsed = true;
     lastToolResponse = fallbackResult;
+    const debug = fallbackResult.debug as Record<string, unknown> | undefined;
+    if (debug) {
+      toolDebug = debug;
+    }
   }
 
   const hasPlaces = places.length > 0;
@@ -306,6 +324,7 @@ export const runFoodBuddyAgent = async ({
       toolResponses: lastToolResponse,
     },
     parsedOutput,
+    toolDebug,
   });
 };
 
@@ -388,6 +407,7 @@ const buildAgentResult = ({
   fallbackUsed,
   rawResponse,
   parsedOutput,
+  toolDebug,
 }: {
   message: string;
   places: RecommendationCardData[];
@@ -396,6 +416,7 @@ const buildAgentResult = ({
   fallbackUsed: boolean;
   rawResponse: Record<string, unknown>;
   parsedOutput?: ParsedAgentOutput;
+  toolDebug?: Record<string, unknown>;
 }): AgentResult => {
   const primary = places[0] ?? null;
   const alternatives = places.slice(1, MAX_RECOMMENDATIONS);
@@ -412,5 +433,6 @@ const buildAgentResult = ({
     fallbackUsed,
     rawResponse,
     parsedOutput,
+    toolDebug,
   };
 };

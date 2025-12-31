@@ -28,4 +28,25 @@ export type NearbySearchParams = {
   radiusMeters: number;
   keyword?: string;
   openNow?: boolean;
+  requestId?: string;
+};
+
+export type TextSearchParams = {
+  lat: number;
+  lng: number;
+  query: string;
+  requestId?: string;
+};
+
+export type PlacesSearchDebug = {
+  endpoint: "nearby_search" | "text_search";
+  httpStatus?: number;
+  googleStatus?: string;
+  error_message?: string;
+  resultsCount: number;
+};
+
+export type NearbySearchResponse = {
+  results: PlaceCandidate[];
+  debug?: PlacesSearchDebug;
 };

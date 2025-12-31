@@ -214,6 +214,7 @@ export async function POST(request: Request) {
       userIdHash,
       location: { lat: locationState.lastLat, lng: locationState.lastLng },
       queryText: text,
+      requestId,
     });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : "Unknown error";

@@ -22,6 +22,18 @@ export type ChatResponseDebug = {
   source: "llm_agent";
   toolCallCount: number;
   requestId: string;
+  tool?: {
+    endpointUsed?: string;
+    googleStatus?: string;
+    error_message?: string;
+    attempts?: Array<{
+      radius: number;
+      keyword?: string;
+      endpoint: string;
+      resultsCount: number;
+      googleStatus?: string;
+    }>;
+  };
 };
 
 export type ChatResponse = {
