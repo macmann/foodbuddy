@@ -28,6 +28,7 @@ Required behavior:
 - Ask one clarifying question if cuisine is given but location/radius is missing and no lat/lng is available.
 - If lat/lng is present, call the nearby_search tool to find places.
 - If nearby_search is unavailable or fails, call recommend_places to use internal rankings.
+- Normalize cuisine intents like "chinese food" to "Chinese restaurants" when calling tools.
 - Do not hallucinate places. Use tools for factual data.
 - Always respond in this format:
   1) Short friendly intro (1-2 sentences).
@@ -85,6 +86,7 @@ export const runFoodBuddyAgent = async ({
   let alternatives: RecommendationCardData[] = [];
 
   let lastAssistantText = "";
+  let clarificationMessage: string | null = null;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
     let response: Awaited<ReturnType<typeof callOpenAI>>;
@@ -157,6 +159,18 @@ export const runFoodBuddyAgent = async ({
         alternatives = extracted.alternatives;
       }
 
+      if (toolCall.name === "nearby_search") {
+        const results = result.results as RecommendationCardData[] | undefined;
+        const usedRadiusMeters = result.usedRadiusMeters as number | undefined;
+        const exhausted = result.exhausted as boolean | undefined;
+
+        if (Array.isArray(results) && results.length === 0 && usedRadiusMeters && exhausted) {
+          const km = usedRadiusMeters / 1000;
+          const kmLabel = Number.isInteger(km) ? km.toString() : km.toFixed(1);
+          clarificationMessage = `I couldn’t find results within ${kmLabel} km. Want me to expand to 10 km or search a different neighborhood?`;
+        }
+      }
+
       toolMessages.push({
         role: "tool",
         tool_name: toolCall.name,
@@ -166,6 +180,14 @@ export const runFoodBuddyAgent = async ({
     }
 
     messages.push(...toolMessages);
+
+    if (clarificationMessage) {
+      return {
+        message: clarificationMessage,
+        primary: null,
+        alternatives: [],
+      };
+    }
   }
 
   return {

@@ -53,6 +53,7 @@ export default function HomePageClient() {
   const [rating, setRating] = useState(0);
   const [commentText, setCommentText] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [lastActivityAt, setLastActivityAt] = useState<number | null>(null);
   const [composerPlaceholder] = useState(getRandomPlaceholder);
 
@@ -81,6 +82,16 @@ export default function HomePageClient() {
     }
     setLocationError(null);
   }, [location]);
+
+  useEffect(() => {
+    if (!toastMessage) {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setToastMessage(null);
+    }, 4000);
+    return () => window.clearTimeout(timeout);
+  }, [toastMessage]);
 
   useEffect(() => {
     if (feedbackPromptVisible || feedbackSubmitted || feedbackOptions.length === 0) {
@@ -154,6 +165,16 @@ export default function HomePageClient() {
       return;
     }
 
+    const locationEnabled = Boolean(location);
+    const neighborhood = locationText.trim();
+
+    if (locationEnabled && (location?.lat == null || location?.lng == null)) {
+      setToastMessage(
+        "Location is ON but coordinates are missing. Click ‘Use my current location’ or set a neighborhood.",
+      );
+      return;
+    }
+
     noteActivity();
 
     const userMessage: ChatMessage = {
@@ -171,20 +192,36 @@ export default function HomePageClient() {
     setLoading(true);
 
     try {
+      const payload = {
+        anonId,
+        sessionId,
+        location,
+        locationText: location ? undefined : locationText,
+        neighborhood: neighborhood || undefined,
+        message: userMessage.content,
+        latitude: location?.lat ?? null,
+        longitude: location?.lng ?? null,
+        radius_m: null,
+        locationEnabled,
+      };
+
+      if (process.env.NEXT_PUBLIC_DEBUG === "true") {
+        console.log("Chat payload", payload);
+      }
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          anonId,
-          sessionId,
-          location,
-          locationText: location ? undefined : locationText,
-          message: userMessage.content,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
-        throw new Error("Request failed");
+        const errorBody = (await response.json().catch(() => null)) as
+          | { message?: string }
+          | null;
+        const errorMessage = errorBody?.message ?? "Request failed";
+        setToastMessage(errorMessage);
+        return;
       }
 
       const data = (await response.json()) as ChatResponse;
@@ -319,6 +356,11 @@ export default function HomePageClient() {
   return (
     <main className="min-h-screen bg-slate-50">
       <div className="mx-auto flex min-h-screen max-w-3xl flex-col px-4 py-6 sm:px-6">
+        {toastMessage && (
+          <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800 shadow-sm">
+            {toastMessage}
+          </div>
+        )}
         <header className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 shadow-sm backdrop-blur">
           <div>
             <h1 className="text-lg font-bold text-slate-900">FoodBuddy</h1>
