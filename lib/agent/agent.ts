@@ -7,6 +7,7 @@ import { extractRecommendations, toolHandlers, toolSchemas } from "./tools";
 export type AgentContext = {
   location?: { lat: number; lng: number } | null;
   locationText?: string;
+  radius_m?: number;
   sessionId?: string;
   requestId?: string;
   userIdHash?: string;
@@ -72,6 +73,7 @@ export const runFoodBuddyAgent = async ({
     context.location
       ? `Coordinates: ${context.location.lat}, ${context.location.lng}`
       : null,
+    typeof context.radius_m === "number" ? `Radius (m): ${context.radius_m}` : null,
     context.sessionId ? `Session ID: ${context.sessionId}` : null,
     context.requestId ? `Request ID: ${context.requestId}` : null,
   ].filter(Boolean);
@@ -140,6 +142,7 @@ export const runFoodBuddyAgent = async ({
       try {
         result = await handler(toolCall.arguments, {
           location: context.location,
+          radius_m: context.radius_m,
           requestId: context.requestId,
           userIdHash: context.userIdHash,
         });

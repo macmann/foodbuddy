@@ -8,6 +8,7 @@ import type { ToolSchema } from "./types";
 
 export type AgentToolContext = {
   location?: { lat: number; lng: number } | null;
+  radius_m?: number;
   requestId?: string;
   userIdHash?: string;
 };
@@ -75,7 +76,7 @@ const nearbySearch = async (
   }
 
   const parsed = parseQuery(args.query);
-  const initialRadiusMeters = args.radius_m ?? parsed.radiusMeters;
+  const initialRadiusMeters = args.radius_m ?? context.radius_m ?? parsed.radiusMeters;
   const retryRadii =
     initialRadiusMeters <= 1000 ? [initialRadiusMeters, 3000, 8000] : [initialRadiusMeters];
 

@@ -35,6 +35,7 @@ const PLACEHOLDER_OPTIONS = [
 
 const getRandomPlaceholder = () =>
   PLACEHOLDER_OPTIONS[Math.floor(Math.random() * PLACEHOLDER_OPTIONS.length)];
+const DEFAULT_RADIUS_M = 1500;
 
 export default function HomePageClient() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -192,6 +193,7 @@ export default function HomePageClient() {
     setLoading(true);
 
     try {
+      const radius_m = DEFAULT_RADIUS_M;
       const payload = {
         anonId,
         sessionId,
@@ -201,7 +203,7 @@ export default function HomePageClient() {
         message: userMessage.content,
         latitude: location?.lat ?? null,
         longitude: location?.lng ?? null,
-        radius_m: null,
+        radius_m: typeof radius_m === "number" ? radius_m : DEFAULT_RADIUS_M,
         locationEnabled,
       };
 
