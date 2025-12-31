@@ -43,6 +43,17 @@ type ParsedQuery = {
   llm?: unknown | null;
 };
 
+const toJsonSafe = <T,>(value: T): unknown => {
+  if (value === undefined) {
+    return null;
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return null;
+  }
+};
+
 const DEFAULT_RADIUS_METERS = 1500;
 const EXPANDED_RADIUS_METERS = 3000;
 const MAX_DETAILS = 5;
@@ -248,7 +259,7 @@ export const writeRecommendationEvent = async (
         latencyMs: metadata.latencyMs,
         errorMessage: metadata.errorMessage,
         resultCount: metadata.resultCount,
-        parsedConstraints: metadata.parsedConstraints,
+        parsedConstraints: toJsonSafe(metadata.parsedConstraints) as any,
         requestId: input.requestId ?? null,
         locationEnabled: input.locationEnabled ?? null,
         radiusMeters: input.radiusMeters ?? null,
