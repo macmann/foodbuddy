@@ -11,6 +11,15 @@ const REASONING_OPTIONS = ["low", "medium", "high"] as const;
 const VERBOSITY_OPTIONS = ["low", "medium", "high"] as const;
 const PROMPT_MAX_LENGTH = 10_000;
 
+const normalizeVerbosityValue = (value?: string) => {
+  if (value === "normal") {
+    return "medium";
+  }
+  return VERBOSITY_OPTIONS.includes(value as (typeof VERBOSITY_OPTIONS)[number])
+    ? value
+    : "medium";
+};
+
 const formatTimestamp = (value?: string) => {
   if (!value) {
     return "Never";
@@ -53,7 +62,7 @@ export default function AdminLLMSettingsPage() {
         }
         const data = (await response.json()) as LLMSettingsResponse;
         if (!cancelled) {
-          setSettings(data);
+          setSettings({ ...data, verbosity: normalizeVerbosityValue(data.verbosity) });
         }
       } catch (error) {
         if (!cancelled) {
@@ -108,7 +117,7 @@ export default function AdminLLMSettingsPage() {
           llmModel: settings.llmModel,
           llmSystemPrompt: settings.llmSystemPrompt,
           reasoningEffort: settings.reasoningEffort,
-          verbosity: settings.verbosity,
+          verbosity: normalizeVerbosityValue(settings.verbosity),
         }),
       });
 

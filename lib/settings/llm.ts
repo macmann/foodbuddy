@@ -17,13 +17,13 @@ Required behavior:
 const DEFAULT_LLM_ENABLED = false;
 const DEFAULT_PROVIDER = "openai";
 const DEFAULT_REASONING_EFFORT = "medium";
-const DEFAULT_VERBOSITY = "normal";
+const DEFAULT_VERBOSITY = "medium";
 const MAX_PROMPT_LENGTH = 10_000;
 
 const CACHE_TTL_MS = 45_000;
 
 const allowedReasoningEfforts = ["low", "medium", "high"] as const;
-const allowedVerbosityLevels = ["concise", "normal", "verbose"] as const;
+const allowedVerbosityLevels = ["low", "medium", "high"] as const;
 
 export type ReasoningEffort = (typeof allowedReasoningEfforts)[number];
 export type Verbosity = (typeof allowedVerbosityLevels)[number];
@@ -36,6 +36,17 @@ type LLMSettingsValue = {
   reasoningEffort: ReasoningEffort;
   verbosity: Verbosity;
   isFallback?: boolean;
+};
+
+export const normalizeVerbosity = (input?: string): Verbosity | undefined => {
+  if (input === undefined) {
+    return undefined;
+  }
+  const normalized = input.trim().toLowerCase();
+  if (allowedVerbosityLevels.includes(normalized as Verbosity)) {
+    return normalized as Verbosity;
+  }
+  return "medium";
 };
 
 let cachedSettings: { value: LLMSettingsValue; expiresAt: number } | null = null;
@@ -58,11 +69,7 @@ const normalizeSettings = (settings?: Partial<LLMSettingsValue>): LLMSettingsVal
     allowedReasoningEfforts.includes(settings.reasoningEffort as ReasoningEffort)
       ? (settings.reasoningEffort as ReasoningEffort)
       : DEFAULT_REASONING_EFFORT;
-  const verbosity =
-    typeof settings?.verbosity === "string" &&
-    allowedVerbosityLevels.includes(settings.verbosity as Verbosity)
-      ? (settings.verbosity as Verbosity)
-      : DEFAULT_VERBOSITY;
+  const verbosity = normalizeVerbosity(settings?.verbosity) ?? DEFAULT_VERBOSITY;
 
   if (!isAllowedModel(llmModel)) {
     logger.error({ model: llmModel }, "Invalid LLM model configured; using default");
@@ -104,11 +111,7 @@ export const getLLMSettings = async (): Promise<LLMSettingsValue> => {
         ? (record.reasoningEffort as ReasoningEffort)
         : undefined;
 
-    const verbosity =
-      typeof record?.verbosity === "string" &&
-      allowedVerbosityLevels.includes(record.verbosity as Verbosity)
-        ? (record.verbosity as Verbosity)
-        : undefined;
+    const verbosity = normalizeVerbosity(record?.verbosity);
 
     const value = normalizeSettings({
       llmEnabled: record?.llmEnabled ?? undefined,
