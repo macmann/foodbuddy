@@ -7,7 +7,7 @@ const MODEL_OPTIONS = [
   { value: "gpt-5.2", label: "GPT-5.2" },
 ] as const;
 
-const REASONING_OPTIONS = ["none", "medium", "high", "xhigh"] as const;
+const REASONING_OPTIONS = ["low", "medium", "high"] as const;
 const VERBOSITY_OPTIONS = ["low", "medium", "high"] as const;
 const PROMPT_MAX_LENGTH = 10_000;
 
