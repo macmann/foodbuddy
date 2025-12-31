@@ -43,6 +43,7 @@ export default async function AdminQueriesPage({
   const rangeParam = parseParam(sp.range) ?? "today";
   const channelParam = parseParam(sp.channel) ?? "all";
   const statusParam = parseParam(sp.status) ?? "all";
+  const sourceParam = parseParam(sp.source) ?? "all";
   const qParam = parseParam(sp.q) ?? "";
   const errorsOnly = parseParam(sp.errors) === "1";
   const noResultsOnly = parseParam(sp.noResults) === "1";
@@ -53,6 +54,7 @@ export default async function AdminQueriesPage({
   const channel = channelParam === "all" ? undefined : (channelParam as Channel);
   let status =
     statusParam === "all" ? undefined : (statusParam as RecommendationStatus);
+  const source = sourceParam === "all" ? undefined : sourceParam;
   if (errorsOnly) {
     status = "ERROR";
   }
@@ -65,6 +67,7 @@ export default async function AdminQueriesPage({
     to,
     channel,
     status,
+    source,
     q: qParam || undefined,
     page,
     pageSize,
@@ -81,6 +84,9 @@ export default async function AdminQueriesPage({
     }
     if (statusParam !== "all") {
       params.set("status", statusParam);
+    }
+    if (sourceParam !== "all") {
+      params.set("source", sourceParam);
     }
     if (qParam) {
       params.set("q", qParam);
@@ -108,6 +114,7 @@ export default async function AdminQueriesPage({
         range={rangeParam}
         channel={channelParam}
         status={statusParam}
+        source={sourceParam}
         q={qParam}
         errorsOnly={errorsOnly}
         noResultsOnly={noResultsOnly}
@@ -123,6 +130,9 @@ export default async function AdminQueriesPage({
               <th className="px-4 py-3">Approx Location</th>
               <th className="px-4 py-3">Result Count</th>
               <th className="px-4 py-3">Primary Recommendation</th>
+              <th className="px-4 py-3">Source</th>
+              <th className="px-4 py-3">Tool Calls</th>
+              <th className="px-4 py-3">Model</th>
               <th className="px-4 py-3">Latency</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Action</th>
@@ -131,7 +141,7 @@ export default async function AdminQueriesPage({
           <tbody className="divide-y divide-slate-800 text-slate-200">
             {items.length === 0 ? (
               <tr>
-                <td className="px-4 py-6 text-center text-slate-400" colSpan={9}>
+                <td className="px-4 py-6 text-center text-slate-400" colSpan={12}>
                   No queries found for the selected filters.
                 </td>
               </tr>
@@ -153,6 +163,17 @@ export default async function AdminQueriesPage({
                   <td className="px-4 py-3">{item.resultCount ?? 0}</td>
                   <td className="px-4 py-3">
                     {item.primaryPlaceName ?? "—"}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-200">
+                      {item.source ?? "internal"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {item.toolCallCount ?? 0}
+                  </td>
+                  <td className="px-4 py-3">
+                    {item.llmModel ?? "—"}
                   </td>
                   <td className="px-4 py-3">
                     {item.latencyMs ? `${item.latencyMs} ms` : "—"}

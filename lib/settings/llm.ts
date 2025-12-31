@@ -6,13 +6,20 @@ const DEFAULT_SYSTEM_PROMPT = `You are FoodBuddy, a helpful local food assistant
 
 Required behavior:
 - Ask one clarifying question if cuisine is given but location/radius is missing and no lat/lng is available.
-- If lat/lng is present, call the nearby_search tool to find places.
+- If lat/lng is present and the user asks for restaurants/food/cafes, call the nearby_search tool BEFORE answering.
 - If nearby_search is unavailable or fails, call recommend_places to use internal rankings.
 - Do not hallucinate places. Use tools for factual data.
-- Always respond in this format:
-  1) Short friendly intro (1-2 sentences).
-  2) A numbered list of 3-7 places with Name, Distance (if available), Why it matches (1 line), Price level (if available).
-  3) Optional follow-up question (e.g., filters for halal/budget/delivery).`;
+- Always respond with JSON only, matching this schema:
+  {
+    "intent": "string (short intent summary)",
+    "query": "string (search query to use)",
+    "radius_m": number | null,
+    "open_now": boolean | null,
+    "cuisine": "string | null",
+    "must_call_tools": boolean,
+    "final_answer_text": "string (friendly response shown to the user)"
+  }
+- Set must_call_tools=true for food/restaurant requests.`;
 
 const DEFAULT_LLM_ENABLED = false;
 const DEFAULT_PROVIDER = "openai";
@@ -27,6 +34,15 @@ const allowedVerbosityLevels = ["low", "medium", "high"] as const;
 
 export type ReasoningEffort = (typeof allowedReasoningEfforts)[number];
 export type Verbosity = (typeof allowedVerbosityLevels)[number];
+
+type ModelCapabilities = {
+  supportsTemperature: boolean;
+};
+
+const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
+  "gpt-5-mini": { supportsTemperature: false },
+  "gpt-5.2": { supportsTemperature: false },
+};
 
 type LLMSettingsValue = {
   llmEnabled: boolean;
@@ -46,8 +62,33 @@ export const normalizeVerbosity = (input?: string): Verbosity | undefined => {
   if (allowedVerbosityLevels.includes(normalized as Verbosity)) {
     return normalized as Verbosity;
   }
-  return "medium";
+  return undefined;
 };
+
+export const asReasoningEffort = (input?: string | null): ReasoningEffort | undefined => {
+  if (!input) {
+    return undefined;
+  }
+  const normalized = input.trim().toLowerCase();
+  if (allowedReasoningEfforts.includes(normalized as ReasoningEffort)) {
+    return normalized as ReasoningEffort;
+  }
+  return undefined;
+};
+
+export const asVerbosity = (input?: string | null): Verbosity | undefined => {
+  if (!input) {
+    return undefined;
+  }
+  const normalized = input.trim().toLowerCase();
+  if (allowedVerbosityLevels.includes(normalized as Verbosity)) {
+    return normalized as Verbosity;
+  }
+  return undefined;
+};
+
+export const modelSupportsTemperature = (model: string): boolean =>
+  MODEL_CAPABILITIES[model]?.supportsTemperature ?? false;
 
 let cachedSettings: { value: LLMSettingsValue; expiresAt: number } | null = null;
 
@@ -65,11 +106,8 @@ const normalizeSettings = (settings?: Partial<LLMSettingsValue>): LLMSettingsVal
   const llmSystemPrompt =
     rawPrompt.length <= MAX_PROMPT_LENGTH ? rawPrompt : DEFAULT_SYSTEM_PROMPT;
   const reasoningEffort =
-    typeof settings?.reasoningEffort === "string" &&
-    allowedReasoningEfforts.includes(settings.reasoningEffort as ReasoningEffort)
-      ? (settings.reasoningEffort as ReasoningEffort)
-      : DEFAULT_REASONING_EFFORT;
-  const verbosity = normalizeVerbosity(settings?.verbosity) ?? DEFAULT_VERBOSITY;
+    asReasoningEffort(settings?.reasoningEffort) ?? DEFAULT_REASONING_EFFORT;
+  const verbosity = asVerbosity(settings?.verbosity) ?? DEFAULT_VERBOSITY;
 
   if (!isAllowedModel(llmModel)) {
     logger.error({ model: llmModel }, "Invalid LLM model configured; using default");
@@ -105,13 +143,8 @@ export const getLLMSettings = async (): Promise<LLMSettingsValue> => {
       where: { id: "default" },
     });
 
-    const reasoningEffort =
-      typeof record?.reasoningEffort === "string" &&
-      allowedReasoningEfforts.includes(record.reasoningEffort as ReasoningEffort)
-        ? (record.reasoningEffort as ReasoningEffort)
-        : undefined;
-
-    const verbosity = normalizeVerbosity(record?.verbosity);
+    const reasoningEffort = asReasoningEffort(record?.reasoningEffort);
+    const verbosity = asVerbosity(record?.verbosity);
 
     const value = normalizeSettings({
       llmEnabled: record?.llmEnabled ?? undefined,
@@ -149,3 +182,4 @@ export const LLM_MODEL_ALLOWLIST = [...ALLOWED_MODELS];
 export const LLM_REASONING_ALLOWLIST = [...allowedReasoningEfforts];
 export const LLM_VERBOSITY_ALLOWLIST = [...allowedVerbosityLevels];
 export const LLM_PROMPT_MAX_LENGTH = MAX_PROMPT_LENGTH;
+export const LLM_MODEL_CAPABILITIES = { ...MODEL_CAPABILITIES };

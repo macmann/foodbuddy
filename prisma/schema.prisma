@@ -51,13 +51,22 @@ model RecommendationEvent {
   userIdHash          String
   userLat             Float?
   userLng             Float?
+  requestId           String?
   queryText           String
+  locationEnabled     Boolean?
+  radiusMeters        Int?
   recommendedPlaceIds Json
   status              RecommendationStatus @default(OK)
   latencyMs           Int?
   errorMessage        String?
   resultCount         Int?     @default(0)
   parsedConstraints   Json?
+  source              String?
+  agentEnabled        Boolean?
+  llmModel            String?
+  toolCallCount       Int?
+  fallbackUsed        Boolean?
+  rawResponseJson     String?  @db.Text
   createdAt           DateTime @default(now())
 
   @@index([userIdHash, createdAt])

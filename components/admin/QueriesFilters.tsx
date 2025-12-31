@@ -7,6 +7,7 @@ type QueriesFiltersProps = {
   range: string;
   channel: string;
   status: string;
+  source: string;
   q: string;
   errorsOnly: boolean;
   noResultsOnly: boolean;
@@ -31,10 +32,17 @@ const statusOptions = [
   { value: "NO_RESULTS", label: "NO_RESULTS" },
 ];
 
+const sourceOptions = [
+  { value: "all", label: "All" },
+  { value: "agent", label: "agent" },
+  { value: "internal", label: "internal" },
+];
+
 export default function QueriesFilters({
   range,
   channel,
   status,
+  source,
   q,
   errorsOnly,
   noResultsOnly,
@@ -132,6 +140,23 @@ export default function QueriesFilters({
             }
           >
             {statusOptions.map((option) => (
+              <option key={option.value} value={option.value} className="text-slate-900">
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2">
+          <span className="text-xs uppercase tracking-[0.2em] text-slate-500">Source</span>
+          <select
+            className="bg-transparent text-sm text-slate-200 outline-none"
+            value={source}
+            onChange={(event) =>
+              updateParams({ source: event.target.value === "all" ? null : event.target.value })
+            }
+          >
+            {sourceOptions.map((option) => (
               <option key={option.value} value={option.value} className="text-slate-900">
                 {option.label}
               </option>

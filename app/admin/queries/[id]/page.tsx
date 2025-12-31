@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getQueryDetailWithPlaces } from "../../../../lib/admin/data";
+import RawResponseCard from "../../../../components/admin/RawResponseCard";
 
 const formatLocation = (lat?: number | null, lng?: number | null) => {
   if (lat === null || lat === undefined || lng === null || lng === undefined) {
@@ -28,6 +29,7 @@ export default async function QueryDetailPage({
 
   const { event, places, recommendedPlaceIds } = data;
   const parsedConstraints = event.parsedConstraints as Record<string, unknown> | null;
+  const showToolWarning = event.source === "agent" && (event.toolCallCount ?? 0) === 0;
 
   return (
     <section className="space-y-6">
@@ -82,12 +84,69 @@ export default async function QueryDetailPage({
 
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
+          <h3 className="text-sm font-semibold text-slate-200">Execution summary</h3>
+          <div className="mt-4 space-y-3 text-sm text-slate-300">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs uppercase tracking-[0.2em] text-slate-500">Source</span>
+              <span className="rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-200">
+                {event.source ?? "internal"}
+              </span>
+              {showToolWarning ? (
+                <span className="rounded-full bg-amber-400/20 px-3 py-1 text-xs font-semibold text-amber-200">
+                  Agent did not call tools
+                </span>
+              ) : null}
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                  Agent enabled
+                </p>
+                <p className="mt-1">{event.agentEnabled ? "Yes" : "No"}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-slate-500">LLM model</p>
+                <p className="mt-1">{event.llmModel ?? "—"}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                  Tool calls
+                </p>
+                <p className="mt-1">{event.toolCallCount ?? 0}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                  Fallback used
+                </p>
+                <p className="mt-1">{event.fallbackUsed ? "Yes" : "No"}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Radius</p>
+                <p className="mt-1">
+                  {event.radiusMeters ? `${event.radiusMeters} m` : "—"}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                  Location enabled
+                </p>
+                <p className="mt-1">{event.locationEnabled ? "Yes" : "No"}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
           <h3 className="text-sm font-semibold text-slate-200">Parsed constraints</h3>
           <pre className="mt-3 max-h-64 overflow-auto rounded-xl bg-slate-950/60 p-4 text-xs text-slate-300">
             {parsedConstraints
               ? JSON.stringify(parsedConstraints, null, 2)
               : "No parsed constraints recorded."}
           </pre>
+          {event.status === "NO_RESULTS" ? (
+            <p className="mt-3 text-xs text-amber-200">
+              No results returned. Consider widening the radius or adjusting the query.
+            </p>
+          ) : null}
         </div>
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
           <h3 className="text-sm font-semibold text-slate-200">Recommended place IDs</h3>
@@ -96,6 +155,8 @@ export default async function QueryDetailPage({
           </pre>
         </div>
       </div>
+
+      <RawResponseCard rawResponseJson={event.rawResponseJson} />
 
       <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
         <h3 className="text-sm font-semibold text-slate-200">Recommended places</h3>

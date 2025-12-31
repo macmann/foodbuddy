@@ -22,6 +22,7 @@ type DashboardStatsParams = DateRange & {
 type QueryFilters = DateRange & {
   channel?: Channel;
   status?: RecommendationStatus;
+  source?: string;
   q?: string;
   page: number;
   pageSize: number;
@@ -164,6 +165,7 @@ export const listQueries = async ({
   to,
   channel,
   status,
+  source,
   q,
   page,
   pageSize,
@@ -172,6 +174,7 @@ export const listQueries = async ({
   const where = {
     ...(channel ? { channel } : {}),
     ...(status ? { status } : {}),
+    ...(source ? { source } : {}),
     ...(createdAt ? { createdAt } : {}),
     ...(q
       ? {
