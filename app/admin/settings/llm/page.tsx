@@ -11,13 +11,20 @@ const REASONING_OPTIONS = ["low", "medium", "high"] as const;
 const VERBOSITY_OPTIONS = ["low", "medium", "high"] as const;
 const PROMPT_MAX_LENGTH = 10_000;
 
-const normalizeVerbosityValue = (value?: string) => {
-  if (value === "normal") {
+const normalizeVerbosityValue = (input?: string | null): string => {
+  const normalized = (input ?? "").trim().toLowerCase();
+  if (normalized === "normal") {
     return "medium";
   }
-  return VERBOSITY_OPTIONS.includes(value as (typeof VERBOSITY_OPTIONS)[number])
-    ? value
-    : "medium";
+  if (
+    VERBOSITY_OPTIONS.includes(
+      normalized as (typeof VERBOSITY_OPTIONS)[number],
+    )
+  ) {
+    return normalized;
+  }
+  // Default to "medium" (normal) so empty/invalid values don't break the UI.
+  return "medium";
 };
 
 const formatTimestamp = (value?: string) => {
@@ -62,7 +69,8 @@ export default function AdminLLMSettingsPage() {
         }
         const data = (await response.json()) as LLMSettingsResponse;
         if (!cancelled) {
-          setSettings({ ...data, verbosity: normalizeVerbosityValue(data.verbosity) });
+          const normalizedVerbosity = normalizeVerbosityValue(data.verbosity);
+          setSettings({ ...data, verbosity: normalizedVerbosity });
         }
       } catch (error) {
         if (!cancelled) {
