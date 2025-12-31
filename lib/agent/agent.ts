@@ -1,6 +1,6 @@
 import { logger } from "../logger";
 import type { RecommendationCardData } from "../types";
-import { getLLMSettings } from "../settings/llm";
+import { getLLMSettings, normalizeVerbosity } from "../settings/llm";
 import { callOpenAI, type LlmMessage } from "./openaiClient";
 import { extractRecommendations, toolHandlers, toolSchemas } from "./tools";
 
@@ -57,6 +57,17 @@ export const runFoodBuddyAgent = async ({
   const systemPrompt = normalizedAdminPrompt
     ? `${BASE_SYSTEM_PROMPT}\n\nAdmin instructions:\n${normalizedAdminPrompt}`
     : BASE_SYSTEM_PROMPT;
+  const normalizedVerbosity = normalizeVerbosity(settings.verbosity) ?? "medium";
+
+  logger.info(
+    {
+      requestId: context.requestId,
+      model: settings.llmModel,
+      reasoningEffort: settings.reasoningEffort,
+      verbosity: normalizedVerbosity,
+    },
+    "Routing LLM request",
+  );
 
   const messages: LlmMessage[] = [{ role: "system", content: systemPrompt }];
 

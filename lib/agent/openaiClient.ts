@@ -1,7 +1,7 @@
 import { logger } from "../logger";
 import { normalizeModel } from "./model";
 import type { ToolSchema } from "./types";
-import type { ReasoningEffort, Verbosity } from "../settings/llm";
+import { normalizeVerbosity, type ReasoningEffort, type Verbosity } from "../settings/llm";
 
 export type LlmMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -80,6 +80,7 @@ export const callOpenAI = async ({
     messages[0]?.role === "system"
       ? messages
       : [{ role: "system", content: settings.llmSystemPrompt }, ...messages];
+  const normalizedVerbosity = normalizeVerbosity(settings.verbosity) ?? "medium";
 
   const body = {
     model,
@@ -87,7 +88,7 @@ export const callOpenAI = async ({
     tools,
     input,
     reasoning: { effort: settings.reasoningEffort },
-    text: { verbosity: settings.verbosity },
+    text: { verbosity: normalizedVerbosity },
   };
 
   try {

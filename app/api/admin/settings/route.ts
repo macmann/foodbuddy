@@ -7,15 +7,13 @@ import {
   LLM_REASONING_ALLOWLIST,
   LLM_SETTINGS_DEFAULTS,
   LLM_VERBOSITY_ALLOWLIST,
+  normalizeVerbosity,
   type ReasoningEffort,
-  type Verbosity,
   resetLLMSettingsCache,
 } from "../../../../lib/settings/llm";
 
 const isReasoningEffort = (value: string): value is ReasoningEffort =>
   LLM_REASONING_ALLOWLIST.includes(value as ReasoningEffort);
-const isVerbosity = (value: string): value is Verbosity =>
-  LLM_VERBOSITY_ALLOWLIST.includes(value as Verbosity);
 
 const formatSettings = (record: {
   llmEnabled: boolean;
@@ -31,7 +29,7 @@ const formatSettings = (record: {
   llmModel: record.llmModel,
   llmSystemPrompt: record.llmSystemPrompt,
   reasoningEffort: record.reasoningEffort,
-  verbosity: record.verbosity,
+  verbosity: normalizeVerbosity(record.verbosity) ?? LLM_SETTINGS_DEFAULTS.verbosity,
   updatedAt: record.updatedAt,
 });
 
@@ -84,6 +82,7 @@ export const PUT = async (request: Request) => {
     typeof payload.llmSystemPrompt === "string" ? payload.llmSystemPrompt.trim() : "";
   const reasoningEffort = payload.reasoningEffort;
   const verbosity = payload.verbosity;
+  const normalizedVerbosity = normalizeVerbosity(verbosity);
 
   if (typeof llmEnabled !== "boolean") {
     return NextResponse.json({ error: "Invalid LLM enabled flag" }, { status: 400 });
@@ -113,7 +112,7 @@ export const PUT = async (request: Request) => {
     );
   }
 
-  if (!verbosity || !isVerbosity(verbosity)) {
+  if (!normalizedVerbosity) {
     return NextResponse.json(
       {
         error: `Invalid verbosity. Allowed: ${LLM_VERBOSITY_ALLOWLIST.join(", ")}`,
@@ -130,7 +129,7 @@ export const PUT = async (request: Request) => {
       llmModel,
       llmSystemPrompt,
       reasoningEffort,
-      verbosity,
+      verbosity: normalizedVerbosity,
     },
     create: {
       id: "default",
@@ -139,7 +138,7 @@ export const PUT = async (request: Request) => {
       llmModel,
       llmSystemPrompt,
       reasoningEffort,
-      verbosity,
+      verbosity: normalizedVerbosity,
     },
   });
 

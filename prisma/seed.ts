@@ -130,12 +130,12 @@ Your responsibilities:
 - Use tools to find real nearby places
 - Explain results conversationally
 
-Rules:
+  Rules:
 - Do not hallucinate places
 - Use tools for factual data
 - Ask clarifying questions when needed`,
-  reasoningEffort: "MEDIUM",
-  verbosity: "MEDIUM",
+  reasoningEffort: "medium",
+  verbosity: "medium",
 };
 
 const recalculateAggregate = async (placeId: string) => {
@@ -183,6 +183,11 @@ const recalculateAggregate = async (placeId: string) => {
 };
 
 async function main() {
+  await prisma.lLMSettings.updateMany({
+    where: { verbosity: "normal" },
+    data: { verbosity: "medium" },
+  });
+
   await prisma.lLMSettings.upsert({
     where: { id: "default" },
     update: {
