@@ -17,15 +17,16 @@ Required behavior:
 const DEFAULT_LLM_ENABLED = false;
 const DEFAULT_PROVIDER = "openai";
 const DEFAULT_REASONING_EFFORT = "medium";
-const DEFAULT_VERBOSITY = "medium";
+const DEFAULT_VERBOSITY = "normal";
 const MAX_PROMPT_LENGTH = 10_000;
 
 const CACHE_TTL_MS = 45_000;
 
 const allowedReasoningEfforts = ["low", "medium", "high"] as const;
+const allowedVerbosityLevels = ["concise", "normal", "verbose"] as const;
 
 export type ReasoningEffort = (typeof allowedReasoningEfforts)[number];
-export type Verbosity = "low" | "medium" | "high";
+export type Verbosity = (typeof allowedVerbosityLevels)[number];
 
 type LLMSettingsValue = {
   llmEnabled: boolean;
@@ -38,8 +39,6 @@ type LLMSettingsValue = {
 };
 
 let cachedSettings: { value: LLMSettingsValue; expiresAt: number } | null = null;
-
-const allowedVerbosity: Verbosity[] = ["low", "medium", "high"];
 
 const normalizeSettings = (settings?: Partial<LLMSettingsValue>): LLMSettingsValue => {
   const llmEnabled =
@@ -61,7 +60,7 @@ const normalizeSettings = (settings?: Partial<LLMSettingsValue>): LLMSettingsVal
       : DEFAULT_REASONING_EFFORT;
   const verbosity =
     typeof settings?.verbosity === "string" &&
-    allowedVerbosity.includes(settings.verbosity as Verbosity)
+    allowedVerbosityLevels.includes(settings.verbosity as Verbosity)
       ? (settings.verbosity as Verbosity)
       : DEFAULT_VERBOSITY;
 
@@ -99,20 +98,26 @@ export const getLLMSettings = async (): Promise<LLMSettingsValue> => {
       where: { id: "default" },
     });
 
-  const reasoningEffort =
-    typeof record?.reasoningEffort === "string" &&
-    allowedReasoningEfforts.includes(record.reasoningEffort as ReasoningEffort)
-      ? (record.reasoningEffort as ReasoningEffort)
-      : undefined;
+    const reasoningEffort =
+      typeof record?.reasoningEffort === "string" &&
+      allowedReasoningEfforts.includes(record.reasoningEffort as ReasoningEffort)
+        ? (record.reasoningEffort as ReasoningEffort)
+        : undefined;
 
-  const value = normalizeSettings({
-    llmEnabled: record?.llmEnabled ?? undefined,
-    llmProvider: record?.llmProvider ?? undefined,
-    llmModel: record?.llmModel ?? undefined,
-    llmSystemPrompt: record?.llmSystemPrompt ?? undefined,
-    reasoningEffort,
-    verbosity: record?.verbosity ?? undefined,
-  });
+    const verbosity =
+      typeof record?.verbosity === "string" &&
+      allowedVerbosityLevels.includes(record.verbosity as Verbosity)
+        ? (record.verbosity as Verbosity)
+        : undefined;
+
+    const value = normalizeSettings({
+      llmEnabled: record?.llmEnabled ?? undefined,
+      llmProvider: record?.llmProvider ?? undefined,
+      llmModel: record?.llmModel ?? undefined,
+      llmSystemPrompt: record?.llmSystemPrompt ?? undefined,
+      reasoningEffort,
+      verbosity,
+    });
 
     cachedSettings = { value, expiresAt: now + CACHE_TTL_MS };
     return value;
@@ -139,5 +144,5 @@ export const LLM_SETTINGS_DEFAULTS = {
 
 export const LLM_MODEL_ALLOWLIST = [...ALLOWED_MODELS];
 export const LLM_REASONING_ALLOWLIST = [...allowedReasoningEfforts];
-export const LLM_VERBOSITY_ALLOWLIST = [...allowedVerbosity];
+export const LLM_VERBOSITY_ALLOWLIST = [...allowedVerbosityLevels];
 export const LLM_PROMPT_MAX_LENGTH = MAX_PROMPT_LENGTH;
