@@ -19,9 +19,6 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
-    "@types/node": "^20.17.6",
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
     "@prisma/client": "^5.17.0",
     "autoprefixer": "^10.4.20",
     "jose": "^5.6.3",
@@ -33,14 +30,17 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tailwindcss": "^3.4.10",
-    "typescript": "^5.7.2",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/node": "^20.17.6",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
     "eslint": "^9.6.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-config-next": "^15.0.0",
-    "prettier": "^3.3.2"
+    "prettier": "^3.3.2",
+    "typescript": "^5.7.2"
   },
   "eslintConfig": {
     "extends": [

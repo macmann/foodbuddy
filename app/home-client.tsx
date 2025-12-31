@@ -14,9 +14,11 @@ type ChatMessage = MessageBubbleData & {
 };
 
 type ChatResponse = {
-  primary: RecommendationCardData | null;
-  alternatives: RecommendationCardData[];
-  message: string;
+  replyText?: string;
+  places?: RecommendationCardData[];
+  primary?: RecommendationCardData | null;
+  alternatives?: RecommendationCardData[];
+  message?: string;
 };
 
 const createId = () => crypto.randomUUID();
@@ -182,9 +184,17 @@ export default function HomePageClient() {
       }
 
       const data = (await response.json()) as ChatResponse;
-      const recommendations = [data.primary, ...data.alternatives].filter(
-        (item): item is RecommendationCardData => Boolean(item),
-      );
+      const combined = (data.places ?? [])
+        .concat([data.primary, ...(data.alternatives ?? [])])
+        .filter((item): item is RecommendationCardData => Boolean(item));
+      const seen = new Set<string>();
+      const recommendations = combined.filter((item) => {
+        if (seen.has(item.placeId)) {
+          return false;
+        }
+        seen.add(item.placeId);
+        return true;
+      });
 
       if (recommendations.length > 0) {
         setFeedbackOptions(recommendations);
@@ -205,7 +215,7 @@ export default function HomePageClient() {
       const assistantMessage: ChatMessage = {
         id: createId(),
         role: "assistant",
-        content: data.message,
+        content: data.replyText ?? data.message ?? "Here are a few places to consider.",
         recommendations,
         createdAt: Date.now(),
       };

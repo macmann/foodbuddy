@@ -102,10 +102,12 @@ model RagDocument {
 }
 
 model LLMSettings {
-  id           String   @id @default("default")
-  model        String
-  systemPrompt String
-  temperature  Float    @default(0.3)
-  maxTokens    Int      @default(800)
-  updatedAt    DateTime @updatedAt
+  id              String   @id @default("default")
+  llmEnabled      Boolean  @default(false)
+  llmProvider     String   @default("openai")
+  llmModel        String   @default("gpt-5-mini")
+  llmSystemPrompt String   @db.Text
+  reasoningEffort String   @default("medium")
+  verbosity       String   @default("medium")
+  updatedAt       DateTime @updatedAt
 }

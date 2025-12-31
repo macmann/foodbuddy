@@ -4,62 +4,85 @@ import { ALLOWED_MODELS, DEFAULT_MODEL, isAllowedModel } from "../agent/model";
 
 const DEFAULT_SYSTEM_PROMPT = `You are FoodBuddy, a helpful local food assistant.
 
-Your responsibilities:
-- Understand natural language food requests
-- Ask for location if missing
-- Use tools to find real nearby places
-- Explain results conversationally
+Required behavior:
+- Ask one clarifying question if cuisine is given but location/radius is missing and no lat/lng is available.
+- If lat/lng is present, call the nearby_search tool to find places.
+- If nearby_search is unavailable or fails, call recommend_places to use internal rankings.
+- Do not hallucinate places. Use tools for factual data.
+- Always respond in this format:
+  1) Short friendly intro (1-2 sentences).
+  2) A numbered list of 3-7 places with Name, Distance (if available), Why it matches (1 line), Price level (if available).
+  3) Optional follow-up question (e.g., filters for halal/budget/delivery).`;
 
-Rules:
-- Do not hallucinate places
-- Use tools for factual data
-- Ask clarifying questions when needed`;
-const DEFAULT_TEMPERATURE = 0.3;
-const DEFAULT_MAX_TOKENS = 800;
+const DEFAULT_LLM_ENABLED = false;
+const DEFAULT_PROVIDER = "openai";
+const DEFAULT_REASONING_EFFORT = "medium";
+const DEFAULT_VERBOSITY = "medium";
+const MAX_PROMPT_LENGTH = 10_000;
 
 const CACHE_TTL_MS = 45_000;
 
+export type ReasoningEffort = "none" | "medium" | "high" | "xhigh";
+export type Verbosity = "low" | "medium" | "high";
+
 type LLMSettingsValue = {
-  model: string;
-  systemPrompt: string;
-  temperature: number;
-  maxTokens: number;
+  llmEnabled: boolean;
+  llmProvider: string;
+  llmModel: string;
+  llmSystemPrompt: string;
+  reasoningEffort: ReasoningEffort;
+  verbosity: Verbosity;
   isFallback?: boolean;
 };
 
 let cachedSettings: { value: LLMSettingsValue; expiresAt: number } | null = null;
 
-const clamp = (value: number, min: number, max: number) =>
-  Math.min(Math.max(value, min), max);
+const allowedReasoningEfforts: ReasoningEffort[] = ["none", "medium", "high", "xhigh"];
+const allowedVerbosity: Verbosity[] = ["low", "medium", "high"];
 
 const normalizeSettings = (settings?: Partial<LLMSettingsValue>): LLMSettingsValue => {
-  const model = settings?.model ?? DEFAULT_MODEL;
-  const systemPrompt = settings?.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
-  const temperature =
-    typeof settings?.temperature === "number"
-      ? clamp(settings.temperature, 0, 1)
-      : DEFAULT_TEMPERATURE;
-  const maxTokens =
-    typeof settings?.maxTokens === "number"
-      ? Math.round(clamp(settings.maxTokens, 100, 2000))
-      : DEFAULT_MAX_TOKENS;
+  const llmEnabled =
+    typeof settings?.llmEnabled === "boolean" ? settings.llmEnabled : DEFAULT_LLM_ENABLED;
+  const llmProvider =
+    typeof settings?.llmProvider === "string" && settings.llmProvider.trim().length > 0
+      ? settings.llmProvider.trim()
+      : DEFAULT_PROVIDER;
+  const llmModel = settings?.llmModel ?? DEFAULT_MODEL;
+  const hasPrompt = typeof settings?.llmSystemPrompt === "string";
+  const rawPrompt = hasPrompt ? settings.llmSystemPrompt : DEFAULT_SYSTEM_PROMPT;
+  const llmSystemPrompt =
+    rawPrompt.length <= MAX_PROMPT_LENGTH ? rawPrompt : DEFAULT_SYSTEM_PROMPT;
+  const reasoningEffort =
+    typeof settings?.reasoningEffort === "string" &&
+    allowedReasoningEfforts.includes(settings.reasoningEffort as ReasoningEffort)
+      ? (settings.reasoningEffort as ReasoningEffort)
+      : DEFAULT_REASONING_EFFORT;
+  const verbosity =
+    typeof settings?.verbosity === "string" &&
+    allowedVerbosity.includes(settings.verbosity as Verbosity)
+      ? (settings.verbosity as Verbosity)
+      : DEFAULT_VERBOSITY;
 
-  if (!isAllowedModel(model)) {
-    logger.error({ model }, "Invalid LLM model configured; using default");
+  if (!isAllowedModel(llmModel)) {
+    logger.error({ model: llmModel }, "Invalid LLM model configured; using default");
     return {
-      model: DEFAULT_MODEL,
-      systemPrompt,
-      temperature,
-      maxTokens,
+      llmEnabled,
+      llmProvider,
+      llmModel: DEFAULT_MODEL,
+      llmSystemPrompt,
+      reasoningEffort,
+      verbosity,
       isFallback: true,
     };
   }
 
   return {
-    model,
-    systemPrompt,
-    temperature,
-    maxTokens,
+    llmEnabled,
+    llmProvider,
+    llmModel,
+    llmSystemPrompt,
+    reasoningEffort,
+    verbosity,
   };
 };
 
@@ -75,10 +98,12 @@ export const getLLMSettings = async (): Promise<LLMSettingsValue> => {
     });
 
     const value = normalizeSettings({
-      model: record?.model,
-      systemPrompt: record?.systemPrompt,
-      temperature: record?.temperature ?? undefined,
-      maxTokens: record?.maxTokens ?? undefined,
+      llmEnabled: record?.llmEnabled ?? undefined,
+      llmProvider: record?.llmProvider ?? undefined,
+      llmModel: record?.llmModel ?? undefined,
+      llmSystemPrompt: record?.llmSystemPrompt ?? undefined,
+      reasoningEffort: record?.reasoningEffort ?? undefined,
+      verbosity: record?.verbosity ?? undefined,
     });
 
     cachedSettings = { value, expiresAt: now + CACHE_TTL_MS };
@@ -96,10 +121,15 @@ export const resetLLMSettingsCache = () => {
 };
 
 export const LLM_SETTINGS_DEFAULTS = {
-  model: DEFAULT_MODEL,
-  systemPrompt: DEFAULT_SYSTEM_PROMPT,
-  temperature: DEFAULT_TEMPERATURE,
-  maxTokens: DEFAULT_MAX_TOKENS,
+  llmEnabled: DEFAULT_LLM_ENABLED,
+  llmProvider: DEFAULT_PROVIDER,
+  llmModel: DEFAULT_MODEL,
+  llmSystemPrompt: DEFAULT_SYSTEM_PROMPT,
+  reasoningEffort: DEFAULT_REASONING_EFFORT,
+  verbosity: DEFAULT_VERBOSITY,
 };
 
 export const LLM_MODEL_ALLOWLIST = [...ALLOWED_MODELS];
+export const LLM_REASONING_ALLOWLIST = [...allowedReasoningEfforts];
+export const LLM_VERBOSITY_ALLOWLIST = [...allowedVerbosity];
+export const LLM_PROMPT_MAX_LENGTH = MAX_PROMPT_LENGTH;

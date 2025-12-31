@@ -167,7 +167,7 @@ export const toolSchemas: ToolSchema[] = [
   },
   {
     type: "function",
-    name: "recommend_internal",
+    name: "recommend_places",
     description: "Use FoodBuddy internal recommendation engine",
     parameters: {
       type: "object",
@@ -206,13 +206,13 @@ export const toolHandlers: Record<string, ToolHandler> = {
     );
     return result;
   },
-  recommend_internal: async (args, context) => {
+  recommend_places: async (args, context) => {
     const start = Date.now();
     const result = await recommendInternal(args as RecommendInternalArgs, context);
     logger.info(
       {
         requestId: context.requestId,
-        tool: "recommend_internal",
+        tool: "recommend_places",
         latencyMs: Date.now() - start,
       },
       "Tool executed",
@@ -238,7 +238,7 @@ export const extractRecommendations = (
   toolName: string,
   toolResult: Record<string, unknown>,
 ): { primary: RecommendationCardData | null; alternatives: RecommendationCardData[] } => {
-  if (toolName === "nearby_search" || toolName === "recommend_internal") {
+  if (toolName === "nearby_search" || toolName === "recommend_places") {
     const results = toolResult.results as RecommendationCardData[] | undefined;
     if (!Array.isArray(results)) {
       return { primary: null, alternatives: [] };
