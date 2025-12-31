@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import { logger } from "../logger";
 import type { RecommendationCardData } from "../types";
 import { getLLMSettings, normalizeVerbosity } from "../settings/llm";
@@ -18,23 +20,38 @@ export type AgentContext = {
 
 export type AgentResult = {
   message: string;
+  status: "OK" | "NO_RESULTS" | "ERROR";
   primary: RecommendationCardData | null;
   alternatives: RecommendationCardData[];
+  places: RecommendationCardData[];
+  toolCallCount: number;
+  llmModel: string;
+  fallbackUsed: boolean;
+  rawResponse: Record<string, unknown>;
+  parsedOutput?: ParsedAgentOutput;
 };
 
 const MAX_TOOL_ROUNDS = 3;
+const MAX_RECOMMENDATIONS = 7;
 const BASE_SYSTEM_PROMPT = `You are FoodBuddy, a helpful local food assistant.
 
 Required behavior:
 - Ask one clarifying question if cuisine is given but location/radius is missing and no lat/lng is available.
-- If lat/lng is present, call the nearby_search tool to find places.
+- If lat/lng is present and the user asks for restaurants/food/cafes, call the nearby_search tool BEFORE answering.
 - If nearby_search is unavailable or fails, call recommend_places to use internal rankings.
 - Normalize cuisine intents like "chinese food" to "Chinese restaurants" when calling tools.
 - Do not hallucinate places. Use tools for factual data.
-- Always respond in this format:
-  1) Short friendly intro (1-2 sentences).
-  2) A numbered list of 3-7 places with Name, Distance (if available), Why it matches (1 line), Price level (if available).
-  3) Optional follow-up question (e.g., filters for halal/budget/delivery).`;
+- Always respond with JSON only, matching this schema:
+  {
+    "intent": "string (short intent summary)",
+    "query": "string (search query to use)",
+    "radius_m": number | null,
+    "open_now": boolean | null,
+    "cuisine": "string | null",
+    "must_call_tools": boolean,
+    "final_answer_text": "string (friendly response shown to the user)"
+  }
+- Set must_call_tools=true for food/restaurant requests.`;
 
 export const runFoodBuddyAgent = async ({
   userMessage,
@@ -97,9 +114,14 @@ export const runFoodBuddyAgent = async ({
 
   let primary: RecommendationCardData | null = null;
   let alternatives: RecommendationCardData[] = [];
+  let places: RecommendationCardData[] = [];
+  let toolCallCount = 0;
+  let fallbackUsed = false;
 
   let lastAssistantText = "";
   let clarificationMessage: string | null = null;
+  let parsedOutput: ParsedAgentOutput | undefined;
+  let lastToolResponse: Record<string, unknown> | null = null;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
     let response: Awaited<ReturnType<typeof callOpenAI>>;
@@ -116,15 +138,11 @@ export const runFoodBuddyAgent = async ({
     }
 
     lastAssistantText = response.assistantText || lastAssistantText;
+    toolCallCount += response.toolCalls.length;
+    parsedOutput = parseAgentOutput(response.assistantText) ?? parsedOutput;
 
     if (response.toolCalls.length === 0) {
-      return {
-        message:
-          response.assistantText ||
-          "Here are a few places that could work. Let me know if you want more options.",
-        primary,
-        alternatives,
-      };
+      break;
     }
 
     if (response.assistantText) {
@@ -173,6 +191,13 @@ export const runFoodBuddyAgent = async ({
         alternatives = extracted.alternatives;
       }
 
+      const toolPlaces = extractPlaceResults(toolCall.name, result);
+      if (toolPlaces.length > 0) {
+        places = mergeRecommendations(places, toolPlaces);
+        primary = primary ?? places[0] ?? null;
+        alternatives = primary ? places.slice(1, MAX_RECOMMENDATIONS) : places;
+      }
+
       if (toolCall.name === "nearby_search") {
         const results = result.results as RecommendationCardData[] | undefined;
         const usedRadiusMeters = result.usedRadiusMeters as number | undefined;
@@ -191,24 +216,201 @@ export const runFoodBuddyAgent = async ({
         tool_call_id: toolCall.id,
         content: JSON.stringify(result),
       });
+
+      lastToolResponse = result;
     }
 
     messages.push(...toolMessages);
 
     if (clarificationMessage) {
-      return {
+      const recommended = mergeRecommendations(
+        places,
+        primary ? [primary, ...alternatives] : alternatives,
+      );
+      return buildAgentResult({
         message: clarificationMessage,
-        primary: null,
-        alternatives: [],
-      };
+        places: recommended,
+        llmModel: settings.llmModel,
+        toolCallCount,
+        fallbackUsed,
+        rawResponse: {
+          assistantText: lastAssistantText,
+          toolResponses: lastToolResponse,
+        },
+        parsedOutput,
+      });
+    }
+
+    if (primary || alternatives.length > 0) {
+      const message =
+        parsedOutput?.final_answer_text ||
+        response.assistantText ||
+        "Here are a few places that could work. Let me know if you want more options.";
+      const recommended = mergeRecommendations(
+        places,
+        primary ? [primary, ...alternatives] : alternatives,
+      );
+      return buildAgentResult({
+        message,
+        places: recommended,
+        llmModel: settings.llmModel,
+        toolCallCount,
+        fallbackUsed,
+        rawResponse: {
+          assistantText: lastAssistantText,
+          toolResponses: lastToolResponse,
+        },
+        parsedOutput,
+      });
     }
   }
 
-  return {
-    message:
+  if (
+    toolCallCount === 0 &&
+    (parsedOutput?.must_call_tools ?? true) &&
+    (context.location || context.locationText)
+  ) {
+    const fallbackQuery = parsedOutput?.query || userMessage;
+    const fallbackResult = await toolHandlers.recommend_places(
+      { query: fallbackQuery, location: context.locationText },
+      {
+        location: context.location,
+        radius_m: context.radius_m,
+        requestId: context.requestId,
+        userIdHash: context.userIdHash,
+      },
+    );
+    const fallbackPlaces = extractPlaceResults("recommend_places", fallbackResult);
+    places = mergeRecommendations(places, fallbackPlaces);
+    primary = places[0] ?? null;
+    alternatives = primary ? places.slice(1, MAX_RECOMMENDATIONS) : [];
+    fallbackUsed = true;
+    lastToolResponse = fallbackResult;
+  }
+
+  const hasPlaces = places.length > 0;
+  const message = hasPlaces
+    ? parsedOutput?.final_answer_text ||
       lastAssistantText ||
-      "Here are a few places that could work. Let me know if you want more options.",
+      "Here are a few places that could work. Let me know if you want more options."
+    : "I couldn’t find places nearby for that request. Try widening the radius or a different keyword.";
+
+  return buildAgentResult({
+    message,
+    places,
+    llmModel: settings.llmModel,
+    toolCallCount,
+    fallbackUsed,
+    rawResponse: {
+      assistantText: lastAssistantText,
+      toolResponses: lastToolResponse,
+    },
+    parsedOutput,
+  });
+};
+
+type ParsedAgentOutput = {
+  intent?: string;
+  query?: string;
+  radius_m?: number | null;
+  open_now?: boolean | null;
+  cuisine?: string | null;
+  must_call_tools?: boolean;
+  final_answer_text?: string;
+};
+
+const ParsedAgentSchema = z.object({
+  intent: z.string().optional(),
+  query: z.string().optional(),
+  radius_m: z.number().nullable().optional(),
+  open_now: z.boolean().nullable().optional(),
+  cuisine: z.string().nullable().optional(),
+  must_call_tools: z.boolean().optional(),
+  final_answer_text: z.string().optional(),
+});
+
+const parseAgentOutput = (text?: string | null): ParsedAgentOutput | undefined => {
+  if (!text) {
+    return undefined;
+  }
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) {
+    return undefined;
+  }
+  const candidate = text.slice(start, end + 1);
+  try {
+    const json = JSON.parse(candidate) as unknown;
+    const parsed = ParsedAgentSchema.safeParse(json);
+    if (!parsed.success) {
+      return undefined;
+    }
+    return parsed.data;
+  } catch {
+    return undefined;
+  }
+};
+
+const extractPlaceResults = (
+  toolName: string,
+  toolResult: Record<string, unknown>,
+): RecommendationCardData[] => {
+  if (toolName !== "nearby_search" && toolName !== "recommend_places") {
+    return [];
+  }
+  const results = toolResult.results as RecommendationCardData[] | undefined;
+  if (!Array.isArray(results)) {
+    return [];
+  }
+  return results;
+};
+
+const mergeRecommendations = (
+  base: RecommendationCardData[],
+  next: RecommendationCardData[],
+): RecommendationCardData[] => {
+  const seen = new Set(base.map((item) => item.placeId));
+  const merged = [...base];
+  next.forEach((item) => {
+    if (!seen.has(item.placeId)) {
+      seen.add(item.placeId);
+      merged.push(item);
+    }
+  });
+  return merged;
+};
+
+const buildAgentResult = ({
+  message,
+  places,
+  llmModel,
+  toolCallCount,
+  fallbackUsed,
+  rawResponse,
+  parsedOutput,
+}: {
+  message: string;
+  places: RecommendationCardData[];
+  llmModel: string;
+  toolCallCount: number;
+  fallbackUsed: boolean;
+  rawResponse: Record<string, unknown>;
+  parsedOutput?: ParsedAgentOutput;
+}): AgentResult => {
+  const primary = places[0] ?? null;
+  const alternatives = places.slice(1, MAX_RECOMMENDATIONS);
+  const status = places.length > 0 ? "OK" : "NO_RESULTS";
+
+  return {
+    message: message.trim(),
+    status,
     primary,
     alternatives,
+    places,
+    toolCallCount,
+    llmModel,
+    fallbackUsed,
+    rawResponse,
+    parsedOutput,
   };
 };

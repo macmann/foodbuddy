@@ -53,6 +53,23 @@ type RecommendationMetadata = {
   resultCount: number;
   recommendedPlaceIds: string[];
   parsedConstraints: ParsedQuery;
+  message?: string;
+};
+
+type RecommendationEventInput = {
+  channel: "WEB" | "TELEGRAM" | "VIBER" | "MESSENGER";
+  userIdHash: string;
+  location?: { lat: number; lng: number } | null;
+  locationEnabled?: boolean;
+  radiusMeters?: number | null;
+  queryText: string;
+  requestId?: string | null;
+  source?: "agent" | "internal";
+  agentEnabled?: boolean;
+  llmModel?: string | null;
+  toolCallCount?: number | null;
+  fallbackUsed?: boolean | null;
+  rawResponseJson?: string | null;
 };
 
 export const recommend = async (
@@ -214,7 +231,7 @@ const upsertPlaces = async (places: PlaceDetails[]): Promise<void> => {
 };
 
 export const writeRecommendationEvent = async (
-  input: RecommendationInput,
+  input: RecommendationEventInput,
   metadata: RecommendationMetadata,
 ): Promise<void> => {
   try {
@@ -222,8 +239,8 @@ export const writeRecommendationEvent = async (
       data: {
         channel: input.channel,
         userIdHash: input.userIdHash,
-        userLat: input.location.lat,
-        userLng: input.location.lng,
+        userLat: input.location?.lat ?? null,
+        userLng: input.location?.lng ?? null,
         queryText: input.queryText,
         recommendedPlaceIds: metadata.recommendedPlaceIds,
         status: metadata.status,
@@ -231,6 +248,15 @@ export const writeRecommendationEvent = async (
         errorMessage: metadata.errorMessage,
         resultCount: metadata.resultCount,
         parsedConstraints: metadata.parsedConstraints,
+        requestId: input.requestId ?? null,
+        locationEnabled: input.locationEnabled ?? null,
+        radiusMeters: input.radiusMeters ?? null,
+        source: input.source ?? null,
+        agentEnabled: input.agentEnabled ?? null,
+        llmModel: input.llmModel ?? null,
+        toolCallCount: input.toolCallCount ?? null,
+        fallbackUsed: input.fallbackUsed ?? null,
+        rawResponseJson: input.rawResponseJson ?? null,
       },
     });
   } catch (error) {

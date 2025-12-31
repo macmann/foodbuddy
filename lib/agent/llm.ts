@@ -1,6 +1,7 @@
 import { logger } from "../logger";
 import { normalizeModel } from "./model";
 import type { ToolSchema } from "./types";
+import { modelSupportsTemperature } from "../settings/llm";
 
 export type LlmMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -89,7 +90,7 @@ export const callLLM = async ({
       },
       body: JSON.stringify({
         model,
-        temperature: settings.temperature,
+        ...(modelSupportsTemperature(model) ? { temperature: settings.temperature } : {}),
         max_output_tokens: settings.maxTokens,
         tool_choice: "auto",
         tools,

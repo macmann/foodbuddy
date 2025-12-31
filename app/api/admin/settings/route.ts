@@ -7,6 +7,8 @@ import {
   LLM_REASONING_ALLOWLIST,
   LLM_SETTINGS_DEFAULTS,
   LLM_VERBOSITY_ALLOWLIST,
+  asReasoningEffort,
+  asVerbosity,
   normalizeVerbosity,
   type ReasoningEffort,
   resetLLMSettingsCache,
@@ -80,9 +82,8 @@ export const PUT = async (request: Request) => {
   const llmModel = payload.llmModel;
   const llmSystemPrompt =
     typeof payload.llmSystemPrompt === "string" ? payload.llmSystemPrompt.trim() : "";
-  const reasoningEffort = payload.reasoningEffort;
-  const verbosity = payload.verbosity;
-  const normalizedVerbosity = normalizeVerbosity(verbosity);
+  const reasoningEffort = asReasoningEffort(payload.reasoningEffort);
+  const normalizedVerbosity = asVerbosity(payload.verbosity);
 
   if (typeof llmEnabled !== "boolean") {
     return NextResponse.json({ error: "Invalid LLM enabled flag" }, { status: 400 });

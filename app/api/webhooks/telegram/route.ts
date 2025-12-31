@@ -221,8 +221,14 @@ export async function POST(request: Request) {
       {
         channel: "TELEGRAM",
         userIdHash,
-        location: { lat: locationState.lastLat, lng: locationState.lastLng },
+        location: {
+          lat: roundCoord(locationState.lastLat),
+          lng: roundCoord(locationState.lastLng),
+        },
         queryText: text,
+        locationEnabled: true,
+        source: "internal",
+        agentEnabled: false,
       },
       {
         status: "ERROR",
@@ -247,8 +253,14 @@ export async function POST(request: Request) {
     {
       channel: "TELEGRAM",
       userIdHash,
-      location: { lat: locationState.lastLat, lng: locationState.lastLng },
+      location: {
+        lat: roundCoord(locationState.lastLat),
+        lng: roundCoord(locationState.lastLng),
+      },
       queryText: text,
+      locationEnabled: true,
+      source: "internal",
+      agentEnabled: false,
     },
     {
       status: places.length === 0 ? "NO_RESULTS" : "OK",
@@ -291,3 +303,5 @@ export async function POST(request: Request) {
 
   return respond(200, { ok: true });
 }
+
+const roundCoord = (value: number) => Math.round(value * 100) / 100;

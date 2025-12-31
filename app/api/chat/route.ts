@@ -8,6 +8,7 @@ import { runFoodBuddyAgent } from "../../../lib/agent/agent";
 import { haversineMeters } from "../../../lib/reco/scoring";
 import { getLLMSettings } from "../../../lib/settings/llm";
 import { isAllowedModel } from "../../../lib/agent/model";
+import type { ChatResponse } from "../../../lib/types/chat";
 
 const buildRecommendationPayload = (
   result: Awaited<ReturnType<typeof recommend>>,
@@ -38,7 +39,13 @@ export async function POST(request: Request) {
   const { requestId, startTime } = createRequestContext(request);
   const channel = "WEB";
   const logContext = { requestId, channel };
-  const respond = (status: number, payload: Record<string, unknown>) => {
+  const respondChat = (status: number, payload: ChatResponse) => {
+    const response = NextResponse.json(payload, { status });
+    response.headers.set("x-request-id", requestId);
+    logger.info({ ...logContext, latencyMs: Date.now() - startTime }, "chat request complete");
+    return response;
+  };
+  const respondError = (status: number, payload: Record<string, unknown>) => {
     const response = NextResponse.json(payload, { status });
     response.headers.set("x-request-id", requestId);
     logger.info({ ...logContext, latencyMs: Date.now() - startTime }, "chat request complete");
@@ -59,11 +66,11 @@ export async function POST(request: Request) {
   };
 
   if (!body?.anonId || !body?.sessionId || !body?.message) {
-    return respond(400, { error: "Invalid request" });
+    return respondError(400, { error: "Invalid request" });
   }
 
   if (body.message.length > 500) {
-    return respond(400, { error: "Message too long" });
+    return respondError(400, { error: "Message too long" });
   }
 
   const userIdHash = hashUserId(body.anonId);
@@ -73,6 +80,9 @@ export async function POST(request: Request) {
     typeof body.longitude === "number" ? body.longitude : body.location?.lng;
   const hasCoordinates = latitude != null && longitude != null;
   const location = hasCoordinates ? { lat: latitude, lng: longitude } : null;
+  const eventLocation = location
+    ? { lat: roundCoord(location.lat), lng: roundCoord(location.lng) }
+    : null;
   const locationEnabled = Boolean(body.locationEnabled);
   const locationText = body.neighborhood ?? body.locationText;
   const locale = request.headers.get("accept-language")?.split(",")[0];
@@ -80,6 +90,7 @@ export async function POST(request: Request) {
     typeof body.radius_m === "number" && Number.isFinite(body.radius_m) && body.radius_m > 0
       ? body.radius_m
       : 1500;
+  const radiusMeters = Math.round(radius_m);
   const radius_defaulted =
     locationEnabled &&
     hasCoordinates &&
@@ -98,7 +109,7 @@ export async function POST(request: Request) {
   );
 
   if (locationEnabled && (latitude == null || longitude == null)) {
-    return respond(400, {
+    return respondError(400, {
       error: "LOCATION_REQUIRED",
       message: "Please share your location or set a neighborhood.",
     });
@@ -106,7 +117,7 @@ export async function POST(request: Request) {
 
   const limiter = rateLimit(`chat:${userIdHash}`, 10, 60_000);
   if (!limiter.allowed) {
-    const response = respond(429, { error: "Rate limit exceeded" });
+    const response = respondError(429, { error: "Rate limit exceeded" });
     response.headers.set(
       "Retry-After",
       Math.ceil((limiter.resetAt - Date.now()) / 1000).toString(),
@@ -155,40 +166,65 @@ export async function POST(request: Request) {
         },
       });
 
-      const recommendations = [agentResult.primary, ...agentResult.alternatives].filter(
-        Boolean,
+      const recommendations = agentResult.places ?? [];
+      const resultCount = recommendations.length;
+      const status = agentResult.status;
+      const parsedConstraints = parseQuery(body.message);
+      const rawResponseJson = truncateJson(
+        JSON.stringify({
+          assistant: agentResult.message,
+          toolCallCount: agentResult.toolCallCount,
+          parsedOutput: agentResult.parsedOutput,
+          toolResponses: agentResult.rawResponse,
+        }),
       );
 
-      if (location) {
-        const parsedConstraints = parseQuery(body.message);
-        await writeRecommendationEvent(
-          {
-            channel: "WEB",
-            userIdHash,
-            location,
-            queryText: body.message,
+      await writeRecommendationEvent(
+        {
+          channel: "WEB",
+          userIdHash,
+          location: eventLocation,
+          queryText: body.message,
+          requestId,
+          locationEnabled,
+            radiusMeters,
+          source: "agent",
+          agentEnabled,
+          llmModel,
+          toolCallCount: agentResult.toolCallCount,
+          fallbackUsed: agentResult.fallbackUsed,
+          rawResponseJson,
+        },
+        {
+          status,
+          latencyMs: Date.now() - agentStart,
+          resultCount,
+          recommendedPlaceIds: recommendations.map((item) => item.placeId),
+          parsedConstraints: {
+            ...parsedConstraints,
+            llm: agentResult.parsedOutput ?? null,
           },
-          {
-            status: recommendations.length === 0 ? "NO_RESULTS" : "OK",
-            latencyMs: Date.now() - agentStart,
-            resultCount: recommendations.length,
-            recommendedPlaceIds: recommendations.map((item) => item!.placeId),
-            parsedConstraints,
-          },
-        );
-      }
+        },
+      );
 
       logger.info(
         { ...logContext, latencyMs: Date.now() - agentStart },
         "Agent response complete",
       );
 
-      return respond(200, {
-        replyText: agentResult.message,
-        places: recommendations,
+      return respondChat(200, {
+        message: agentResult.message,
+        status,
         primary: agentResult.primary,
         alternatives: agentResult.alternatives,
-        message: agentResult.message,
+        places: recommendations,
+        meta: {
+          source: "agent",
+          toolCallCount: agentResult.toolCallCount,
+          llmModel,
+          fallbackUsed: agentResult.fallbackUsed,
+          latencyMs: Date.now() - agentStart,
+        },
       });
     }
 
@@ -217,12 +253,43 @@ export async function POST(request: Request) {
 
   if (!location) {
     logger.info({ ...logContext, path: "fallback" }, "Missing location for chat");
-    return respond(200, {
+    const message = "Please share a location so I can find nearby places.";
+    await writeRecommendationEvent(
+      {
+        channel: "WEB",
+        userIdHash,
+        location: eventLocation,
+        queryText: body.message,
+        requestId,
+        locationEnabled,
+        radiusMeters,
+        source: "internal",
+        agentEnabled,
+        llmModel,
+        toolCallCount: 0,
+        fallbackUsed: false,
+        rawResponseJson: truncateJson(JSON.stringify({ message })),
+      },
+      {
+        status: "ERROR",
+        latencyMs: Date.now() - startTime,
+        errorMessage: "Missing location",
+        resultCount: 0,
+        recommendedPlaceIds: [],
+        parsedConstraints: parseQuery(body.message),
+      },
+    );
+    return respondChat(200, {
       primary: null,
       alternatives: [],
-      message: "Please share a location so I can find nearby places.",
-      replyText: "Please share a location so I can find nearby places.",
+      message,
+      status: "ERROR",
       places: [],
+      meta: {
+        source: "internal",
+        toolCallCount: 0,
+        latencyMs: Date.now() - startTime,
+      },
     });
   }
 
@@ -250,8 +317,23 @@ export async function POST(request: Request) {
       {
         channel: "WEB",
         userIdHash,
-        location,
+        location: eventLocation,
         queryText: body.message,
+        requestId,
+        locationEnabled,
+        radiusMeters,
+        source: "internal",
+        agentEnabled,
+        llmModel,
+        toolCallCount: 0,
+        fallbackUsed: false,
+        rawResponseJson: truncateJson(
+          JSON.stringify({
+            status,
+            resultCount,
+            recommendedPlaceIds,
+          }),
+        ),
       },
       {
         status,
@@ -262,16 +344,22 @@ export async function POST(request: Request) {
       },
     );
 
-    const message = recommendation.primary
-      ? "Here are a few spots you might like."
-      : "Sorry, I couldn't find any places for that query.";
+    const message =
+      resultCount > 0
+        ? "Here are a few spots you might like."
+        : "Sorry, I couldn't find any places for that query.";
 
-    return respond(200, {
+    return respondChat(200, {
       primary: primary ?? null,
       alternatives,
       message,
-      replyText: message,
+      status,
       places: payload,
+      meta: {
+        source: "internal",
+        toolCallCount: 0,
+        latencyMs: Date.now() - recommendationStart,
+      },
     });
   } catch (fallbackError) {
     const errorMessage =
@@ -280,8 +368,19 @@ export async function POST(request: Request) {
       {
         channel: "WEB",
         userIdHash,
-        location,
+        location: eventLocation,
         queryText: body.message,
+        requestId,
+        locationEnabled,
+        radiusMeters,
+        source: "internal",
+        agentEnabled,
+        llmModel,
+        toolCallCount: 0,
+        fallbackUsed: false,
+        rawResponseJson: truncateJson(
+          JSON.stringify({ error: errorMessage, message: "Internal fallback error" }),
+        ),
       },
       {
         status: "ERROR",
@@ -293,12 +392,22 @@ export async function POST(request: Request) {
       },
     );
     logger.error({ err: fallbackError, ...logContext }, "Failed fallback recommendations");
-    return respond(200, {
+    return respondChat(200, {
       primary: null,
       alternatives: [],
       message: "Sorry, something went wrong while finding places.",
-      replyText: "Sorry, something went wrong while finding places.",
+      status: "ERROR",
       places: [],
+      meta: {
+        source: "internal",
+        toolCallCount: 0,
+        latencyMs: Date.now() - recommendationStart,
+      },
     });
   }
 }
+
+const truncateJson = (value: string, maxLength = 8000) =>
+  value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+
+const roundCoord = (value: number) => Math.round(value * 100) / 100;

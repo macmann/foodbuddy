@@ -7,18 +7,11 @@ import FeedbackCard from "../components/FeedbackCard";
 import LocationGate from "../components/LocationGate";
 import MessageBubble, { type MessageBubbleData } from "../components/MessageBubble";
 import RecommendationCard from "../components/RecommendationCard";
-import type { RecommendationCardData } from "../lib/types";
+import type { ChatResponse, RecommendationCardData } from "../lib/types/chat";
 
 type ChatMessage = MessageBubbleData & {
   recommendations?: RecommendationCardData[];
-};
-
-type ChatResponse = {
-  replyText?: string;
-  places?: RecommendationCardData[];
-  primary?: RecommendationCardData | null;
-  alternatives?: RecommendationCardData[];
-  message?: string;
+  status?: ChatResponse["status"];
 };
 
 const isRecommendationCard = (
@@ -229,7 +222,7 @@ export default function HomePageClient() {
       const data = (await response.json()) as ChatResponse;
       const extras = [data.primary, ...(data.alternatives ?? [])].filter(
         isRecommendationCard,
-      );
+      ) as RecommendationCardData[];
       const combined = (data.places ?? []).concat(extras);
       const seen = new Set<string>();
       const recommendations = combined.filter((item) => {
@@ -259,8 +252,9 @@ export default function HomePageClient() {
       const assistantMessage: ChatMessage = {
         id: createId(),
         role: "assistant",
-        content: data.replyText ?? data.message ?? "Here are a few places to consider.",
+        content: data.message ?? "Here are a few places to consider.",
         recommendations,
+        status: data.status,
         createdAt: Date.now(),
       };
 
@@ -428,6 +422,14 @@ export default function HomePageClient() {
                       </button>
                     </div>
                   )}
+                  {message.role === "assistant" &&
+                    message.status === "NO_RESULTS" &&
+                    (!message.recommendations || message.recommendations.length === 0) && (
+                      <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                        No results yet. Try increasing the radius, changing cuisine, or
+                        searching a nearby neighborhood.
+                      </div>
+                    )}
                 </MessageBubble>
                 <div className="h-px w-full bg-slate-100" />
               </div>
