@@ -121,10 +121,8 @@ const sampleFeedback = [
 
 const llmDefaults = {
   id: "default",
-  model: "gpt-5-mini",
-  temperature: 0.3,
-  maxTokens: 800,
-  systemPrompt: `You are FoodBuddy, a helpful local food assistant.
+  llmModel: "gpt-5-mini",
+  llmSystemPrompt: `You are FoodBuddy, a helpful local food assistant.
 
 Your responsibilities:
 - Understand natural language food requests
@@ -136,6 +134,8 @@ Rules:
 - Do not hallucinate places
 - Use tools for factual data
 - Ask clarifying questions when needed`,
+  reasoningEffort: "MEDIUM",
+  verbosity: "MEDIUM",
 };
 
 const recalculateAggregate = async (placeId: string) => {
@@ -186,10 +186,10 @@ async function main() {
   await prisma.lLMSettings.upsert({
     where: { id: "default" },
     update: {
-      model: llmDefaults.model,
-      temperature: llmDefaults.temperature,
-      maxTokens: llmDefaults.maxTokens,
-      systemPrompt: llmDefaults.systemPrompt,
+      llmModel: llmDefaults.llmModel,
+      llmSystemPrompt: llmDefaults.llmSystemPrompt,
+      reasoningEffort: llmDefaults.reasoningEffort,
+      verbosity: llmDefaults.verbosity,
     },
     create: llmDefaults,
   });
