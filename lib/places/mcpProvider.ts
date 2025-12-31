@@ -1,6 +1,13 @@
 import { logger } from "../logger";
 import type { PlacesProvider } from "./provider";
-import type { Coordinates, NearbySearchParams, PlaceCandidate, PlaceDetails } from "./types";
+import type {
+  Coordinates,
+  NearbySearchParams,
+  NearbySearchResponse,
+  PlaceCandidate,
+  PlaceDetails,
+  TextSearchParams,
+} from "./types";
 
 type JsonRpcResponse<T> = {
   result?: T;
@@ -22,13 +29,25 @@ export class McpPlacesProvider implements PlacesProvider {
     }
   }
 
-  async nearbySearch(params: NearbySearchParams): Promise<PlaceCandidate[]> {
+  async nearbySearch(params: NearbySearchParams): Promise<NearbySearchResponse> {
     try {
       const result = await this.call<PlaceCandidate[]>("nearbySearch", params);
-      return Array.isArray(result) ? result : [];
+      const results = Array.isArray(result) ? result : [];
+      return { results };
     } catch (err) {
       logger.error({ err }, "MCP nearby search failed");
-      return [];
+      return { results: [] };
+    }
+  }
+
+  async textSearch(params: TextSearchParams): Promise<NearbySearchResponse> {
+    try {
+      const result = await this.call<PlaceCandidate[]>("textSearch", params);
+      const results = Array.isArray(result) ? result : [];
+      return { results };
+    } catch (err) {
+      logger.error({ err }, "MCP text search failed");
+      return { results: [] };
     }
   }
 

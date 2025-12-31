@@ -5,7 +5,14 @@ import { logger } from "../logger";
 import { mcpCall } from "../mcp/client";
 import type { ListToolsResult, ToolDefinition } from "../mcp/types";
 import type { PlacesProvider } from "./provider";
-import type { Coordinates, NearbySearchParams, PlaceCandidate, PlaceDetails } from "./types";
+import type {
+  Coordinates,
+  NearbySearchParams,
+  NearbySearchResponse,
+  PlaceCandidate,
+  PlaceDetails,
+  TextSearchParams,
+} from "./types";
 
 type ToolResolution = {
   geocode: ToolDefinition;
@@ -226,18 +233,27 @@ export class ComposioMcpProvider implements PlacesProvider {
     }
   }
 
-  async nearbySearch(params: NearbySearchParams): Promise<PlaceCandidate[]> {
+  async nearbySearch(params: NearbySearchParams): Promise<NearbySearchResponse> {
     const requestId = buildRequestId();
     try {
       const tools = await this.resolveTools();
       const args = this.buildNearbySearchArgs(tools.nearbySearch, params);
       const result = await this.callTool(tools.nearbySearch.name, args, requestId);
       const places = extractPlacesArray(result).map(normalizePlace).filter(Boolean) as PlaceCandidate[];
-      return places.slice(0, 20);
+      return { results: places.slice(0, 20) };
     } catch (err) {
       logger.error({ err, requestId }, "Composio MCP nearby search failed");
-      return [];
+      return { results: [] };
     }
+  }
+
+  async textSearch(params: TextSearchParams): Promise<NearbySearchResponse> {
+    return this.nearbySearch({
+      lat: params.lat,
+      lng: params.lng,
+      radiusMeters: 5000,
+      keyword: params.query,
+    });
   }
 
   async placeDetails(placeId: string): Promise<PlaceDetails | null> {

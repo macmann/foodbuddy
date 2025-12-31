@@ -8,7 +8,11 @@ import { runFoodBuddyAgent } from "../../../lib/agent/agent";
 import { haversineMeters } from "../../../lib/reco/scoring";
 import { getLLMSettings } from "../../../lib/settings/llm";
 import { isAllowedModel } from "../../../lib/agent/model";
-import type { ChatResponse, RecommendationCardData } from "../../../lib/types/chat";
+import type {
+  ChatResponse,
+  ChatResponseDebug,
+  RecommendationCardData,
+} from "../../../lib/types/chat";
 
 const buildRecommendationPayload = (
   result: Awaited<ReturnType<typeof recommend>>,
@@ -44,6 +48,8 @@ const buildAgentResponse = ({
   llmModel,
   fallbackUsed,
   latencyMs,
+  debugEnabled,
+  toolDebug,
 }: {
   agentMessage: string | null | undefined;
   recommendations: RecommendationCardData[];
@@ -53,6 +59,8 @@ const buildAgentResponse = ({
   llmModel?: string | null;
   fallbackUsed?: boolean;
   latencyMs: number;
+  debugEnabled: boolean;
+  toolDebug?: Record<string, unknown>;
 }): ChatResponse => {
   const hasRecommendations = recommendations.length > 0;
   const trimmedMessage = agentMessage?.trim();
@@ -78,11 +86,14 @@ const buildAgentResponse = ({
       fallbackUsed,
       latencyMs,
     },
-    debug: {
-      source: "llm_agent",
-      toolCallCount,
-      requestId,
-    },
+    debug: debugEnabled
+      ? {
+          source: "llm_agent",
+          toolCallCount,
+          requestId,
+          tool: (toolDebug as { tool?: ChatResponseDebug["tool"] })?.tool,
+        }
+      : undefined,
   };
 };
 
@@ -90,6 +101,7 @@ export async function POST(request: Request) {
   const { requestId, startTime } = createRequestContext(request);
   const channel = "WEB";
   const logContext = { requestId, channel };
+  const debugEnabled = process.env.FOODBUDDY_DEBUG === "true";
   const respondChat = (status: number, payload: ChatResponse) => {
     const response = NextResponse.json(payload, { status });
     response.headers.set("x-request-id", requestId);
@@ -248,6 +260,7 @@ export async function POST(request: Request) {
             llmModel,
             fallbackUsed: false,
             latencyMs: Date.now() - startTime,
+            debugEnabled,
           }),
         );
       }
@@ -268,6 +281,7 @@ export async function POST(request: Request) {
           userIdHash,
           channel,
           locale: locale ?? undefined,
+          locationEnabled,
         },
       });
 
@@ -288,6 +302,21 @@ export async function POST(request: Request) {
           toolResponses: agentResult.rawResponse,
         }),
       );
+      const toolDebug = agentResult.toolDebug as
+        | { tool?: { googleStatus?: string; error_message?: string } }
+        | undefined;
+      if (toolDebug?.tool || agentResult.toolCallCount > 0) {
+        logger.info(
+          {
+            requestId,
+            tool: "recommend_places",
+            returnedCount: resultCount,
+            googleStatusIfAny: toolDebug?.tool?.googleStatus,
+            errorIfAny: toolDebug?.tool?.error_message,
+          },
+          "Tool result summary",
+        );
+      }
 
       await writeRecommendationEvent(
         {
@@ -333,6 +362,8 @@ export async function POST(request: Request) {
           llmModel,
           fallbackUsed: agentResult.fallbackUsed,
           latencyMs: Date.now() - agentStart,
+          debugEnabled,
+          toolDebug: agentResult.toolDebug,
         }),
       );
     }
@@ -430,6 +461,8 @@ export async function POST(request: Request) {
       userIdHash,
       location,
       queryText: body.message,
+      radiusMetersOverride: radiusMeters,
+      requestId,
     });
 
     const payload = buildRecommendationPayload(recommendation, location);

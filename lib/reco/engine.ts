@@ -19,6 +19,8 @@ type RecommendationInput = {
   userIdHash: string;
   location: { lat: number; lng: number };
   queryText: string;
+  radiusMetersOverride?: number;
+  requestId?: string;
 };
 
 type RecommendationResult = {
@@ -89,27 +91,99 @@ export const recommend = async (
 ): Promise<RecommendationResponse> => {
   const provider = getPlacesProvider();
   const parsed = parseQuery(input.queryText);
+  const baseRadius = input.radiusMetersOverride ?? parsed.radiusMeters;
+  const radii = Array.from(new Set([baseRadius, 2500, 5000])).filter(
+    (radius) => radius > 0,
+  );
+  const keywordVariants = buildKeywordVariants(input.queryText, parsed.keyword);
 
-  let candidates = await provider.nearbySearch({
-    lat: input.location.lat,
-    lng: input.location.lng,
-    radiusMeters: parsed.radiusMeters,
-    keyword: parsed.keyword,
-    openNow: parsed.openNow,
-  });
+  let candidates: PlaceCandidate[] = [];
+  let lastDebug: {
+    endpoint?: string;
+    googleStatus?: string;
+    error_message?: string;
+  } = {};
+  const attempts: Array<{
+    radius: number;
+    keyword?: string;
+    endpoint: string;
+    resultsCount: number;
+    googleStatus?: string;
+  }> = [];
 
-  if (candidates.length < 3 && parsed.radiusMeters === DEFAULT_RADIUS_METERS) {
-    candidates = await provider.nearbySearch({
+  for (const radiusMeters of radii) {
+    for (const keyword of keywordVariants) {
+      const response = await provider.nearbySearch({
+        lat: input.location.lat,
+        lng: input.location.lng,
+        radiusMeters,
+        keyword,
+        openNow: parsed.openNow,
+        requestId: input.requestId ?? undefined,
+      });
+      candidates = response.results;
+      lastDebug = {
+        endpoint: response.debug?.endpoint,
+        googleStatus: response.debug?.googleStatus,
+        error_message: response.debug?.error_message,
+      };
+      attempts.push({
+        radius: radiusMeters,
+        keyword,
+        endpoint: response.debug?.endpoint ?? "nearby_search",
+        resultsCount: response.results.length,
+        googleStatus: response.debug?.googleStatus,
+      });
+
+      if (candidates.length > 0) {
+        break;
+      }
+    }
+    if (candidates.length > 0) {
+      break;
+    }
+  }
+
+  if (candidates.length === 0) {
+    const cleanedKeyword =
+      keywordVariants[keywordVariants.length - 1] ??
+      parsed.keyword ??
+      input.queryText;
+    const query = `${cleanedKeyword} near (${input.location.lat},${input.location.lng})`;
+    const response = await provider.textSearch({
       lat: input.location.lat,
       lng: input.location.lng,
-      radiusMeters: EXPANDED_RADIUS_METERS,
-      keyword: parsed.keyword,
-      openNow: parsed.openNow,
+      query,
+      requestId: input.requestId ?? undefined,
+    });
+    candidates = response.results;
+    lastDebug = {
+      endpoint: response.debug?.endpoint,
+      googleStatus: response.debug?.googleStatus,
+      error_message: response.debug?.error_message,
+    };
+    attempts.push({
+      radius: radii[radii.length - 1] ?? baseRadius,
+      keyword: cleanedKeyword,
+      endpoint: response.debug?.endpoint ?? "text_search",
+      resultsCount: response.results.length,
+      googleStatus: response.debug?.googleStatus,
     });
   }
 
   if (candidates.length === 0) {
-    return { primary: null, alternatives: [] };
+    return {
+      primary: null,
+      alternatives: [],
+      debug: {
+        tool: {
+          endpointUsed: lastDebug.endpoint,
+          googleStatus: lastDebug.googleStatus,
+          error_message: lastDebug.error_message,
+          attempts,
+        },
+      },
+    };
   }
 
   const topCandidates = candidates.slice(0, MAX_DETAILS);
@@ -181,7 +255,32 @@ export const recommend = async (
   return {
     primary: primary ?? null,
     alternatives: alternatives.slice(0, 2),
+    debug: {
+      tool: {
+        endpointUsed: lastDebug.endpoint,
+        googleStatus: lastDebug.googleStatus,
+        error_message: lastDebug.error_message,
+        attempts,
+      },
+    },
   };
+};
+
+const buildKeywordVariants = (rawQuery: string, parsedKeyword?: string): string[] => {
+  const normalized = rawQuery.toLowerCase();
+  const original = normalized
+    .replace(/(open|near|nearby|around|in|at)/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  const stripped = normalized
+    .replace(/(cheap|budget|low price|affordable)/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  const noun = stripped.split(" ").filter(Boolean).slice(-1)[0];
+  const variants = [original, parsedKeyword, stripped, noun].filter(
+    (value): value is string => Boolean(value && value.trim().length > 0),
+  );
+  return Array.from(new Set(variants));
 };
 
 export const parseQuery = (queryText: string): ParsedQuery => {

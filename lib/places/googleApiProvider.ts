@@ -1,10 +1,19 @@
 import { logger } from "../logger";
 import type { PlacesProvider } from "./provider";
-import type { Coordinates, NearbySearchParams, PlaceCandidate, PlaceDetails } from "./types";
+import type {
+  Coordinates,
+  NearbySearchParams,
+  NearbySearchResponse,
+  PlaceCandidate,
+  PlaceDetails,
+  PlacesSearchDebug,
+  TextSearchParams,
+} from "./types";
 
 const GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json";
 const NEARBY_SEARCH_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json";
 const PLACE_DETAILS_URL = "https://maps.googleapis.com/maps/api/place/details/json";
+const TEXT_SEARCH_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json";
 
 const PLACE_DETAILS_FIELDS = [
   "place_id",
@@ -74,7 +83,10 @@ export class GoogleApiProvider implements PlacesProvider {
     }
   }
 
-  async nearbySearch(params: NearbySearchParams): Promise<PlaceCandidate[]> {
+  async nearbySearch(params: NearbySearchParams): Promise<NearbySearchResponse> {
+    const debugBase = {
+      endpoint: "nearby_search",
+    } satisfies Pick<PlacesSearchDebug, "endpoint">;
     try {
       const url = new URL(NEARBY_SEARCH_URL);
       url.searchParams.set("location", `${params.lat},${params.lng}`);
@@ -89,21 +101,112 @@ export class GoogleApiProvider implements PlacesProvider {
 
       const response = await fetch(url);
       const data = (await response.json()) as GoogleResponse<GooglePlaceResult>;
+      const debug: PlacesSearchDebug = {
+        ...debugBase,
+        httpStatus: response.status,
+        googleStatus: data.status,
+        error_message: data.error_message,
+        resultsCount: data.results?.length ?? 0,
+      };
+
+      logger.info(
+        {
+          requestId: params.requestId,
+          endpoint: debug.endpoint,
+          httpStatus: debug.httpStatus,
+          googleStatus: debug.googleStatus,
+          error_message: debug.error_message,
+          resultsCount: debug.resultsCount,
+        },
+        "Google nearby search response",
+      );
 
       if (data.status !== "OK" || !data.results) {
         logger.error(
           { status: data.status, err: data.error_message },
           "Google nearby search failed",
         );
-        return [];
+        return { results: [], debug };
       }
 
-      return data.results
+      const results = data.results
         .map((result) => normalizePlaceResult(result))
         .filter((result): result is PlaceCandidate => result !== null);
+      return { results, debug: { ...debug, resultsCount: results.length } };
     } catch (err) {
+      logger.info(
+        {
+          requestId: params.requestId,
+          endpoint: debugBase.endpoint,
+          httpStatus: undefined,
+          googleStatus: undefined,
+          error_message: err instanceof Error ? err.message : String(err),
+          resultsCount: 0,
+        },
+        "Google nearby search response",
+      );
       logger.error({ err }, "Google nearby search threw an error");
-      return [];
+      return { results: [], debug: { ...debugBase, resultsCount: 0 } };
+    }
+  }
+
+  async textSearch(params: TextSearchParams): Promise<NearbySearchResponse> {
+    const debugBase = {
+      endpoint: "text_search",
+    } satisfies Pick<PlacesSearchDebug, "endpoint">;
+    try {
+      const url = new URL(TEXT_SEARCH_URL);
+      url.searchParams.set("query", params.query);
+      url.searchParams.set("key", this.apiKey);
+
+      const response = await fetch(url);
+      const data = (await response.json()) as GoogleResponse<GooglePlaceResult>;
+      const debug: PlacesSearchDebug = {
+        ...debugBase,
+        httpStatus: response.status,
+        googleStatus: data.status,
+        error_message: data.error_message,
+        resultsCount: data.results?.length ?? 0,
+      };
+
+      logger.info(
+        {
+          requestId: params.requestId,
+          endpoint: debug.endpoint,
+          httpStatus: debug.httpStatus,
+          googleStatus: debug.googleStatus,
+          error_message: debug.error_message,
+          resultsCount: debug.resultsCount,
+        },
+        "Google text search response",
+      );
+
+      if (data.status !== "OK" || !data.results) {
+        logger.error(
+          { status: data.status, err: data.error_message },
+          "Google text search failed",
+        );
+        return { results: [], debug };
+      }
+
+      const results = data.results
+        .map((result) => normalizePlaceResult(result))
+        .filter((result): result is PlaceCandidate => result !== null);
+      return { results, debug: { ...debug, resultsCount: results.length } };
+    } catch (err) {
+      logger.info(
+        {
+          requestId: params.requestId,
+          endpoint: debugBase.endpoint,
+          httpStatus: undefined,
+          googleStatus: undefined,
+          error_message: err instanceof Error ? err.message : String(err),
+          resultsCount: 0,
+        },
+        "Google text search response",
+      );
+      logger.error({ err }, "Google text search threw an error");
+      return { results: [], debug: { ...debugBase, resultsCount: 0 } };
     }
   }
 
