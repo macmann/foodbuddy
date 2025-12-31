@@ -61,14 +61,17 @@ export const mcpCall = async <T>({
   let response: Response;
   try {
     const headers: Record<string, string> = {
-      accept: "application/json, text/event-stream",
+      Accept: "application/json, text/event-stream",
       "content-type": "application/json",
       "x-api-key": apiKey,
     };
     if (apiKey) {
       headers.authorization = `Bearer ${apiKey}`;
     }
-    logger.debug({ accept: headers.accept, method, requestId }, "MCP request headers prepared");
+    logger.debug(
+      { accept: headers.Accept, method, requestId },
+      "MCP request headers prepared",
+    );
 
     response = await fetch(url, {
       method: "POST",

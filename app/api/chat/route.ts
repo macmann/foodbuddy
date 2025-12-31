@@ -6,6 +6,7 @@ import { rateLimit } from "../../../lib/rateLimit";
 import { parseQuery, recommend, writeRecommendationEvent } from "../../../lib/reco/engine";
 import { runFoodBuddyAgent } from "../../../lib/agent/agent";
 import { haversineMeters } from "../../../lib/reco/scoring";
+import { getLLMSettings } from "../../../lib/settings/llm";
 
 const buildRecommendationPayload = (
   result: Awaited<ReturnType<typeof recommend>>,
@@ -61,6 +62,7 @@ export async function POST(request: Request) {
 
   const userIdHash = hashUserId(body.anonId);
   const location = body.location ?? null;
+  const locale = request.headers.get("accept-language")?.split(",")[0];
 
   const limiter = rateLimit(`chat:${userIdHash}`, 10, 60_000);
   if (!limiter.allowed) {
@@ -73,51 +75,59 @@ export async function POST(request: Request) {
   }
 
   try {
-    const agentStart = Date.now();
-    const agentResult = await runFoodBuddyAgent({
-      userMessage: body.message,
-      context: {
-        location,
-        locationText: body.locationText,
-        sessionId: body.sessionId,
-        requestId,
-        userIdHash,
-      },
-    });
+    const settings = await getLLMSettings();
 
-    const recommendations = [agentResult.primary, ...agentResult.alternatives].filter(
-      Boolean,
-    );
-
-    if (location) {
-      const parsedConstraints = parseQuery(body.message);
-      await writeRecommendationEvent(
-        {
-          channel: "WEB",
-          userIdHash,
+    if (settings.llmEnabled) {
+      const agentStart = Date.now();
+      const agentResult = await runFoodBuddyAgent({
+        userMessage: body.message,
+        context: {
           location,
-          queryText: body.message,
+          locationText: body.locationText,
+          sessionId: body.sessionId,
+          requestId,
+          userIdHash,
+          channel,
+          locale: locale ?? undefined,
         },
-        {
-          status: recommendations.length === 0 ? "NO_RESULTS" : "OK",
-          latencyMs: Date.now() - agentStart,
-          resultCount: recommendations.length,
-          recommendedPlaceIds: recommendations.map((item) => item!.placeId),
-          parsedConstraints,
-        },
+      });
+
+      const recommendations = [agentResult.primary, ...agentResult.alternatives].filter(
+        Boolean,
       );
+
+      if (location) {
+        const parsedConstraints = parseQuery(body.message);
+        await writeRecommendationEvent(
+          {
+            channel: "WEB",
+            userIdHash,
+            location,
+            queryText: body.message,
+          },
+          {
+            status: recommendations.length === 0 ? "NO_RESULTS" : "OK",
+            latencyMs: Date.now() - agentStart,
+            resultCount: recommendations.length,
+            recommendedPlaceIds: recommendations.map((item) => item!.placeId),
+            parsedConstraints,
+          },
+        );
+      }
+
+      logger.info(
+        { ...logContext, latencyMs: Date.now() - agentStart },
+        "Agent response complete",
+      );
+
+      return respond(200, {
+        replyText: agentResult.message,
+        places: recommendations,
+        primary: agentResult.primary,
+        alternatives: agentResult.alternatives,
+        message: agentResult.message,
+      });
     }
-
-    logger.info(
-      { ...logContext, latencyMs: Date.now() - agentStart },
-      "Agent response complete",
-    );
-
-    return respond(200, {
-      primary: agentResult.primary,
-      alternatives: agentResult.alternatives,
-      message: agentResult.message,
-    });
   } catch (err) {
     logger.error({ err, ...logContext }, "Agent failed; falling back to recommendations");
   }
@@ -127,6 +137,8 @@ export async function POST(request: Request) {
       primary: null,
       alternatives: [],
       message: "Please share a location so I can find nearby places.",
+      replyText: "Please share a location so I can find nearby places.",
+      places: [],
     });
   }
 
@@ -170,6 +182,8 @@ export async function POST(request: Request) {
       primary: primary ?? null,
       alternatives,
       message,
+      replyText: message,
+      places: payload,
     });
   } catch (fallbackError) {
     const errorMessage =
@@ -195,6 +209,8 @@ export async function POST(request: Request) {
       primary: null,
       alternatives: [],
       message: "Sorry, something went wrong while finding places.",
+      replyText: "Sorry, something went wrong while finding places.",
+      places: [],
     });
   }
 }

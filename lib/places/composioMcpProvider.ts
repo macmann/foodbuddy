@@ -304,12 +304,17 @@ export class ComposioMcpProvider implements PlacesProvider {
       return toolsCache.value;
     }
 
-    const result = await mcpCall<ListToolsResult>({
-      url: this.url,
-      apiKey: this.apiKey,
-      method: "tools/list",
-      params: {},
-    });
+    let result: ListToolsResult | null = null;
+    try {
+      result = await mcpCall<ListToolsResult>({
+        url: this.url,
+        apiKey: this.apiKey,
+        method: "tools/list",
+        params: {},
+      });
+    } catch (err) {
+      logger.error({ err }, "Composio MCP tool listing failed");
+    }
 
     const tools = Array.isArray(result?.tools) ? result.tools : [];
     toolsCache = { value: tools, expiresAt: now + TOOLS_TTL_MS };

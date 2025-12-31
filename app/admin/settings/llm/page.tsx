@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { DEFAULT_MODEL, isAllowedModel } from "../../../../lib/agent/model";
 
 const MODEL_OPTIONS = [
   { value: "gpt-5-mini", label: "GPT-5 mini" },
   { value: "gpt-5.2", label: "GPT-5.2" },
 ] as const;
+
+const REASONING_OPTIONS = ["none", "medium", "high", "xhigh"] as const;
+const VERBOSITY_OPTIONS = ["low", "medium", "high"] as const;
 const PROMPT_MAX_LENGTH = 10_000;
 
 const formatTimestamp = (value?: string) => {
@@ -21,10 +23,12 @@ const formatTimestamp = (value?: string) => {
 };
 
 type LLMSettingsResponse = {
-  model: string;
-  systemPrompt: string;
-  temperature: number;
-  maxTokens: number;
+  llmEnabled: boolean;
+  llmProvider: string;
+  llmModel: string;
+  llmSystemPrompt: string;
+  reasoningEffort: string;
+  verbosity: string;
   updatedAt?: string;
 };
 
@@ -35,14 +39,13 @@ export default function AdminLLMSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<ToastState>(null);
-  const [modelWarning, setModelWarning] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     const load = async () => {
       try {
-        const response = await fetch("/api/admin/llm-settings", {
+        const response = await fetch("/api/admin/settings", {
           cache: "no-store",
         });
         if (!response.ok) {
@@ -50,13 +53,7 @@ export default function AdminLLMSettingsPage() {
         }
         const data = (await response.json()) as LLMSettingsResponse;
         if (!cancelled) {
-          if (!isAllowedModel(data.model)) {
-            setModelWarning("Invalid model detected. Defaulting to GPT-5 mini.");
-            setSettings({ ...data, model: DEFAULT_MODEL });
-          } else {
-            setModelWarning(null);
-            setSettings(data);
-          }
+          setSettings(data);
         }
       } catch (error) {
         if (!cancelled) {
@@ -84,11 +81,9 @@ export default function AdminLLMSettingsPage() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  const promptLength = settings?.systemPrompt.length ?? 0;
+  const promptLength = settings?.llmSystemPrompt.length ?? 0;
   const isPromptEmpty = promptLength === 0;
   const promptLengthLabel = `${promptLength.toLocaleString()} / ${PROMPT_MAX_LENGTH.toLocaleString()} chars`;
-
-  const sliderValue = useMemo(() => settings?.temperature ?? 0.3, [settings?.temperature]);
 
   const updateSettings = <K extends keyof LLMSettingsResponse>(
     key: K,
@@ -104,14 +99,16 @@ export default function AdminLLMSettingsPage() {
 
     setSaving(true);
     try {
-      const response = await fetch("/api/admin/llm-settings", {
+      const response = await fetch("/api/admin/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: settings.model,
-          systemPrompt: settings.systemPrompt,
-          temperature: settings.temperature,
-          maxTokens: settings.maxTokens,
+          llmEnabled: settings.llmEnabled,
+          llmProvider: settings.llmProvider,
+          llmModel: settings.llmModel,
+          llmSystemPrompt: settings.llmSystemPrompt,
+          reasoningEffort: settings.reasoningEffort,
+          verbosity: settings.verbosity,
         }),
       });
 
@@ -130,7 +127,6 @@ export default function AdminLLMSettingsPage() {
 
       const data = (await response.json()) as LLMSettingsResponse;
       setSettings(data);
-      setModelWarning(null);
       setToast({ tone: "success", message: "LLM settings saved." });
     } catch (error) {
       const message =
@@ -141,12 +137,17 @@ export default function AdminLLMSettingsPage() {
     }
   };
 
+  const enabledLabel = useMemo(
+    () => (settings?.llmEnabled ? "Enabled" : "Disabled"),
+    [settings?.llmEnabled],
+  );
+
   return (
     <section className="space-y-6">
       <div>
-        <h2 className="text-2xl font-semibold text-white">LLM settings</h2>
+        <h2 className="text-2xl font-semibold text-white">LLM Agent</h2>
         <p className="text-sm text-slate-400">
-          Configure the model and system prompt used for FoodBuddy conversations.
+          Configure the GPT-5 agent that powers FoodBuddy chat responses.
         </p>
       </div>
 
@@ -170,14 +171,29 @@ export default function AdminLLMSettingsPage() {
             <div className="grid gap-6 lg:grid-cols-2">
               <label className="space-y-2 text-sm text-slate-300">
                 <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                  Model
+                  Enable LLM Agent
                 </span>
+                <button
+                  type="button"
+                  onClick={() => updateSettings("llmEnabled", !settings.llmEnabled)}
+                  className={`flex w-full items-center justify-between rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+                    settings.llmEnabled
+                      ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-100"
+                      : "border-slate-700 bg-slate-950 text-slate-300"
+                  }`}
+                >
+                  <span>{enabledLabel}</span>
+                  <span className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                    Toggle
+                  </span>
+                </button>
+              </label>
+
+              <label className="space-y-2 text-sm text-slate-300">
+                <span className="text-xs uppercase tracking-[0.2em] text-slate-500">Model</span>
                 <select
-                  value={settings.model}
-                  onChange={(event) => {
-                    setModelWarning(null);
-                    updateSettings("model", event.target.value);
-                  }}
+                  value={settings.llmModel}
+                  onChange={(event) => updateSettings("llmModel", event.target.value)}
                   className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
                 >
                   {MODEL_OPTIONS.map((option) => (
@@ -186,44 +202,44 @@ export default function AdminLLMSettingsPage() {
                     </option>
                   ))}
                 </select>
-                {modelWarning ? (
-                  <span className="text-xs text-amber-300">{modelWarning}</span>
-                ) : null}
+              </label>
+            </div>
+
+            <div className="grid gap-6 lg:grid-cols-2">
+              <label className="space-y-2 text-sm text-slate-300">
+                <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                  Reasoning effort
+                </span>
+                <select
+                  value={settings.reasoningEffort}
+                  onChange={(event) => updateSettings("reasoningEffort", event.target.value)}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                >
+                  {REASONING_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
               </label>
 
               <label className="space-y-2 text-sm text-slate-300">
                 <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                  Max tokens
+                  Verbosity
                 </span>
-                <input
-                  type="number"
-                  min={100}
-                  max={2000}
-                  value={settings.maxTokens}
-                  onChange={(event) =>
-                    updateSettings("maxTokens", Number(event.target.value))
-                  }
+                <select
+                  value={settings.verbosity}
+                  onChange={(event) => updateSettings("verbosity", event.target.value)}
                   className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                />
+                >
+                  {VERBOSITY_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
               </label>
             </div>
-
-            <label className="space-y-2 text-sm text-slate-300">
-              <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Temperature ({sliderValue.toFixed(2)})
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={sliderValue}
-                onChange={(event) =>
-                  updateSettings("temperature", Number(event.target.value))
-                }
-                className="w-full"
-              />
-            </label>
 
             <label className="space-y-2 text-sm text-slate-300">
               <div className="flex items-center justify-between">
@@ -233,8 +249,8 @@ export default function AdminLLMSettingsPage() {
                 <span className="text-xs text-slate-500">{promptLengthLabel}</span>
               </div>
               <textarea
-                value={settings.systemPrompt}
-                onChange={(event) => updateSettings("systemPrompt", event.target.value)}
+                value={settings.llmSystemPrompt}
+                onChange={(event) => updateSettings("llmSystemPrompt", event.target.value)}
                 rows={10}
                 maxLength={PROMPT_MAX_LENGTH}
                 className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm text-white"
@@ -243,7 +259,7 @@ export default function AdminLLMSettingsPage() {
 
             {isPromptEmpty ? (
               <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-                System prompt is empty. Consider adding guidance for the assistant.
+                System prompt is empty. The default FoodBuddy behavior rules will apply.
               </div>
             ) : null}
 
