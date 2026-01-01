@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { hashUserId } from "../../../lib/hash";
 import { logger } from "../../../lib/logger";
@@ -20,7 +21,7 @@ export const dynamic = "force-dynamic";
 
 type ChatRequestBody = {
   anonId: string;
-  sessionId: string;
+  sessionId?: string;
   location?: { lat: number; lng: number };
   locationText?: string;
   neighborhood?: string;
@@ -100,9 +101,12 @@ const parseChatRequestBody = (payload: unknown): ChatRequestBody | null => {
     return null;
   }
   const anonId = typeof payload.anonId === "string" ? payload.anonId : "";
-  const sessionId = typeof payload.sessionId === "string" ? payload.sessionId : "";
+  const sessionId =
+    typeof payload.sessionId === "string" && payload.sessionId.trim().length > 0
+      ? payload.sessionId
+      : undefined;
   const message = typeof payload.message === "string" ? payload.message : "";
-  if (!anonId || !sessionId || !message) {
+  if (!anonId || !message) {
     return null;
   }
   const location =
@@ -202,6 +206,7 @@ const buildAgentResponse = ({
   latencyMs,
   debugEnabled,
   toolDebug,
+  sessionId,
 }: {
   agentMessage: string | null | undefined;
   recommendations: RecommendationCardData[];
@@ -214,6 +219,7 @@ const buildAgentResponse = ({
   latencyMs: number;
   debugEnabled: boolean;
   toolDebug?: Record<string, unknown>;
+  sessionId: string;
 }): ChatResponse => {
   const hasRecommendations = recommendations.length > 0;
   const trimmedMessage = agentMessage?.trim();
@@ -236,6 +242,7 @@ const buildAgentResponse = ({
     primary,
     alternatives,
     places: recommendations,
+    sessionId,
     successfull,
     error:
       resolvedStatus === "ERROR" || resolvedStatus === "fallback"
@@ -294,6 +301,8 @@ export async function POST(request: Request) {
   if (!body) {
     return respondError(400, { error: "Invalid request" });
   }
+
+  const sessionId = body.sessionId ?? randomUUID();
 
   if (body.message.length > 500) {
     return respondError(400, { error: "Message too long" });
@@ -423,6 +432,7 @@ export async function POST(request: Request) {
             fallbackUsed: false,
             latencyMs: Date.now() - startTime,
             debugEnabled,
+            sessionId,
           }),
         );
       }
@@ -441,7 +451,7 @@ export async function POST(request: Request) {
           context: {
             location: geoLocation,
             radius_m,
-            sessionId: body.sessionId,
+            sessionId,
             requestId,
             userIdHash,
             channel,
@@ -543,6 +553,7 @@ export async function POST(request: Request) {
             latencyMs: Date.now() - agentStart,
             debugEnabled,
             toolDebug: agentResult.toolDebug,
+            sessionId,
           }),
         );
       }
@@ -608,6 +619,7 @@ export async function POST(request: Request) {
       message,
       status: llmTimedOut ? "fallback" : "ERROR",
       places: [],
+      sessionId,
       successfull: false,
       error: { message: "Please share a location so I can find nearby places." },
       meta: {
@@ -696,6 +708,7 @@ export async function POST(request: Request) {
       message,
       status: responseStatus,
       places: payload,
+      sessionId,
       successfull,
       error:
         responseStatus === "ERROR" || responseStatus === "fallback"
@@ -751,6 +764,7 @@ export async function POST(request: Request) {
       message: "Sorry, something went wrong while finding places.",
       status: "ERROR",
       places: [],
+      sessionId,
       successfull: false,
       error: { message: errorMessage },
       meta: {
