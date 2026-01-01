@@ -22,7 +22,7 @@ test("recommend_places returns empty results on MCP failure", async () => {
 
     const result = await toolHandlers.recommend_places(
       { query: "pizza" },
-      { location: { lat: 40.7128, lng: -74.006 } },
+      { location: { kind: "coords", coords: { lat: 40.7128, lng: -74.006 } } },
     );
 
     const results = result.results as unknown[] | undefined;
@@ -112,7 +112,7 @@ test("recommend_places sends JSON-RPC with required headers", async () => {
 
     const result = await toolHandlers.recommend_places(
       { query: "pizza" },
-      { location: { lat: 40.7128, lng: -74.006 } },
+      { location: { kind: "coords", coords: { lat: 40.7128, lng: -74.006 } } },
     );
 
     const results = result.results as unknown[] | undefined;

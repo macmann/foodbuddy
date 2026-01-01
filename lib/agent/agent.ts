@@ -1,14 +1,14 @@
 import { z } from "zod";
 
 import { logger } from "../logger";
+import { getLocationCoords, getLocationText, type GeoLocation } from "../location";
 import type { RecommendationCardData } from "../types";
 import { getLLMSettings, normalizeVerbosity } from "../settings/llm";
 import { callOpenAI, type LlmMessage } from "./openaiClient";
 import { extractRecommendations, toolHandlers, toolSchemas } from "./tools";
 
 export type AgentContext = {
-  location?: { lat: number; lng: number } | null;
-  locationText?: string;
+  location: GeoLocation;
   radius_m?: number;
   locationEnabled?: boolean;
   sessionId?: string;
@@ -56,6 +56,12 @@ Required behavior:
   }
 - Set must_call_tools=true for food/restaurant requests.`;
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const isRecommendationCardData = (value: unknown): value is RecommendationCardData =>
+  isRecord(value) && typeof value.placeId === "string";
+
 export const runFoodBuddyAgent = async ({
   userMessage,
   context,
@@ -97,13 +103,13 @@ export const runFoodBuddyAgent = async ({
     });
   }
 
+  const locationText = getLocationText(context.location);
+  const coords = getLocationCoords(context.location);
   const contextLines = [
     `Channel: ${context.channel ?? "WEB"}`,
     context.locale ? `Locale: ${context.locale}` : null,
-    context.locationText ? `Location text: ${context.locationText}` : null,
-    context.location
-      ? `Coordinates: ${context.location.lat}, ${context.location.lng}`
-      : null,
+    locationText ? `Location text: ${locationText}` : null,
+    coords ? `Coordinates: ${coords.lat}, ${coords.lng}` : null,
     typeof context.radius_m === "number" ? `Radius (m): ${context.radius_m}` : null,
     context.sessionId ? `Session ID: ${context.sessionId}` : null,
     context.requestId ? `Request ID: ${context.requestId}` : null,
@@ -206,9 +212,10 @@ export const runFoodBuddyAgent = async ({
       }
 
       if (toolCall.name === "nearby_search") {
-        const results = result.results as RecommendationCardData[] | undefined;
-        const usedRadiusMeters = result.usedRadiusMeters as number | undefined;
-        const exhausted = result.exhausted as boolean | undefined;
+        const results = Array.isArray(result.results) ? result.results : [];
+        const usedRadiusMeters =
+          typeof result.usedRadiusMeters === "number" ? result.usedRadiusMeters : undefined;
+        const exhausted = typeof result.exhausted === "boolean" ? result.exhausted : undefined;
 
         if (Array.isArray(results) && results.length === 0 && usedRadiusMeters && exhausted) {
           const km = usedRadiusMeters / 1000;
@@ -218,12 +225,12 @@ export const runFoodBuddyAgent = async ({
       }
 
       if (toolCall.name === "recommend_places") {
-        const debug = result.debug as Record<string, unknown> | undefined;
-        const meta = result.meta as { fallbackUsed?: boolean; errorMessage?: string } | undefined;
+        const debug = isRecord(result.debug) ? result.debug : undefined;
+        const meta = isRecord(result.meta) ? result.meta : undefined;
         if (meta?.fallbackUsed) {
           fallbackUsed = true;
         }
-        if (meta?.errorMessage) {
+        if (typeof meta?.errorMessage === "string") {
           errorMessage = meta.errorMessage;
         }
         if (debug) {
@@ -291,11 +298,11 @@ export const runFoodBuddyAgent = async ({
   if (
     toolCallCount === 0 &&
     (parsedOutput?.must_call_tools ?? true) &&
-    (context.location || context.locationText)
+    (context.location.kind !== "none")
   ) {
     const fallbackQuery = parsedOutput?.query || userMessage;
     const fallbackResult = await toolHandlers.recommend_places(
-      { query: fallbackQuery, location: context.locationText },
+      { query: fallbackQuery, location: getLocationText(context.location) },
       {
         location: context.location,
         radius_m: context.radius_m,
@@ -311,14 +318,14 @@ export const runFoodBuddyAgent = async ({
     alternatives = primary ? places.slice(1, MAX_RECOMMENDATIONS) : [];
     fallbackUsed = true;
     lastToolResponse = fallbackResult;
-    const meta = fallbackResult.meta as { fallbackUsed?: boolean; errorMessage?: string } | undefined;
+    const meta = isRecord(fallbackResult.meta) ? fallbackResult.meta : undefined;
     if (meta?.fallbackUsed) {
       fallbackUsed = true;
     }
-    if (meta?.errorMessage) {
+    if (typeof meta?.errorMessage === "string") {
       errorMessage = meta.errorMessage;
     }
-    const debug = fallbackResult.debug as Record<string, unknown> | undefined;
+    const debug = isRecord(fallbackResult.debug) ? fallbackResult.debug : undefined;
     if (debug) {
       toolDebug = debug;
     }
@@ -383,7 +390,7 @@ const parseAgentOutput = (text?: string | null): ParsedAgentOutput | undefined =
   }
   const candidate = text.slice(start, end + 1);
   try {
-    const json = JSON.parse(candidate) as unknown;
+    const json: unknown = JSON.parse(candidate);
     const parsed = ParsedAgentSchema.safeParse(json);
     if (!parsed.success) {
       return undefined;
@@ -401,11 +408,11 @@ const extractPlaceResults = (
   if (toolName !== "nearby_search" && toolName !== "recommend_places") {
     return [];
   }
-  const results = toolResult.results as RecommendationCardData[] | undefined;
+  const results = toolResult.results;
   if (!Array.isArray(results)) {
     return [];
   }
-  return results;
+  return results.filter(isRecommendationCardData);
 };
 
 const mergeRecommendations = (

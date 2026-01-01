@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "../../../../lib/db";
 import { hashUserId } from "../../../../lib/hash";
+import type { GeoLocation } from "../../../../lib/location";
 import { parseQuery, recommend, writeRecommendationEvent } from "../../../../lib/reco/engine";
 import { commentContainsUrl, recordPlaceFeedback } from "../../../../lib/feedback";
 import { logger } from "../../../../lib/logger";
@@ -24,11 +25,31 @@ type TelegramCallbackQuery = {
   message?: { chat: { id: number } };
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const isTelegramUpdate = (value: unknown): value is TelegramUpdate => {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if ("message" in value && value.message !== undefined && !isRecord(value.message)) {
+    return false;
+  }
+  if (
+    "callback_query" in value &&
+    value.callback_query !== undefined &&
+    !isRecord(value.callback_query)
+  ) {
+    return false;
+  }
+  return true;
+};
+
 const ENABLE_TELEGRAM = process.env.ENABLE_TELEGRAM === "true";
 
-const globalForTelegram = globalThis as typeof globalThis & {
+const globalForTelegram: typeof globalThis & {
   telegramRecommendations?: Map<string, string[]>;
-};
+} = globalThis;
 
 const recommendationCache =
   globalForTelegram.telegramRecommendations ?? new Map<string, string[]>();
@@ -129,7 +150,11 @@ export async function POST(request: Request) {
     }
   }
 
-  const update = (await request.json()) as TelegramUpdate;
+  const updatePayload = await request.json();
+  if (!isTelegramUpdate(updatePayload)) {
+    return respond(400, { ok: false });
+  }
+  const update = updatePayload;
 
   if (update.callback_query) {
     const chatId = update.callback_query.message?.chat.id;
@@ -218,14 +243,18 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : "Unknown error";
+    const eventLocation: GeoLocation = {
+      kind: "coords",
+      coords: {
+        lat: roundCoord(locationState.lastLat),
+        lng: roundCoord(locationState.lastLng),
+      },
+    };
     await writeRecommendationEvent(
       {
         channel: "TELEGRAM",
         userIdHash,
-        location: {
-          lat: roundCoord(locationState.lastLat),
-          lng: roundCoord(locationState.lastLng),
-        },
+        location: eventLocation,
         queryText: text,
         locationEnabled: true,
         source: "internal",
@@ -250,14 +279,18 @@ export async function POST(request: Request) {
     .slice(0, 3);
   const recommendedPlaceIds = places.map((item) => item.place.placeId);
 
+  const eventLocation: GeoLocation = {
+    kind: "coords",
+    coords: {
+      lat: roundCoord(locationState.lastLat),
+      lng: roundCoord(locationState.lastLng),
+    },
+  };
   await writeRecommendationEvent(
     {
       channel: "TELEGRAM",
       userIdHash,
-      location: {
-        lat: roundCoord(locationState.lastLat),
-        lng: roundCoord(locationState.lastLng),
-      },
+      location: eventLocation,
       queryText: text,
       locationEnabled: true,
       source: "internal",
