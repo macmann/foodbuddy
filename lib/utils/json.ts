@@ -34,8 +34,12 @@ export const sanitizeToJson = (
   if (value === null) {
     return Prisma.DbNull;
   }
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return value;
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value as JsonOut;
   }
   if (typeof value === "bigint") {
     return value.toString();
@@ -44,22 +48,23 @@ export const sanitizeToJson = (
     return value.toISOString();
   }
   if (typeof value === "function" || typeof value === "symbol") {
-    return Prisma.DbNull;
+    return undefined;
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) {
-      return Prisma.DbNull;
+      return undefined;
     }
     seen.add(value);
     const sanitized = value.map((item) => {
-      const cleaned = toEmbeddedJson(sanitizeToJson(item, seen));
-      return cleaned ?? null;
+      const cleaned = sanitizeToJson(item, seen);
+      const embedded = toEmbeddedJson(cleaned);
+      return embedded ?? null;
     });
-    return sanitized;
+    return sanitized as JsonOut;
   }
   if (isRecord(value)) {
     if (seen.has(value)) {
-      return Prisma.DbNull;
+      return undefined;
     }
     seen.add(value);
     const sanitized: Record<string, JsonOut> = {};
@@ -69,7 +74,12 @@ export const sanitizeToJson = (
         sanitized[key] = cleaned;
       }
     });
-    return sanitized;
+    return sanitized as JsonOut;
   }
-  return Prisma.DbNull;
+  try {
+    const serialized = JSON.parse(JSON.stringify(value));
+    return sanitizeToJson(serialized, seen);
+  } catch {
+    return undefined;
+  }
 };
