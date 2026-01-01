@@ -1,5 +1,8 @@
 import { Prisma } from "@prisma/client";
 
+type JsonOut = Prisma.InputJsonValue;
+type JsonFieldOut = JsonOut | Prisma.NullableJsonNullValueInput | undefined;
+
 export type JsonValue =
   | string
   | number
@@ -11,10 +14,20 @@ export type JsonValue =
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object");
 
+const toEmbeddedJson = (value: JsonFieldOut): JsonOut | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === Prisma.DbNull || value === Prisma.JsonNull) {
+    return null;
+  }
+  return value;
+};
+
 export const sanitizeToJson = (
   value: unknown,
   seen = new WeakSet<object>(),
-): Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput | undefined => {
+): JsonFieldOut => {
   if (value === undefined) {
     return undefined;
   }
@@ -34,18 +47,27 @@ export const sanitizeToJson = (
     return Prisma.DbNull;
   }
   if (Array.isArray(value)) {
-    return value.map((item) => sanitizeToJson(item, seen) ?? Prisma.DbNull);
+    if (seen.has(value)) {
+      return Prisma.DbNull;
+    }
+    seen.add(value);
+    const sanitized = value.map((item) => {
+      const cleaned = toEmbeddedJson(sanitizeToJson(item, seen));
+      return cleaned ?? null;
+    });
+    return sanitized;
   }
   if (isRecord(value)) {
     if (seen.has(value)) {
       return Prisma.DbNull;
     }
     seen.add(value);
-    const sanitized: Record<string, Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput> =
-      {};
+    const sanitized: Record<string, JsonOut> = {};
     Object.entries(value).forEach(([key, entry]) => {
-      const cleaned = sanitizeToJson(entry, seen);
-      sanitized[key] = cleaned ?? Prisma.DbNull;
+      const cleaned = toEmbeddedJson(sanitizeToJson(entry, seen));
+      if (cleaned !== undefined) {
+        sanitized[key] = cleaned;
+      }
     });
     return sanitized;
   }
