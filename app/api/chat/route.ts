@@ -480,7 +480,17 @@ export async function POST(request: Request) {
     const [primary, ...alternatives] = payload;
     const recommendedPlaceIds = payload.map((item) => item.placeId);
     const resultCount = payload.length;
-    const status = resultCount === 0 ? "NO_RESULTS" : "OK";
+    const recommendationDebug = recommendation.debug as
+      | { tool?: { error_message?: string; provider?: string } }
+      | undefined;
+    const providerErrorMessage = recommendationDebug?.tool?.error_message
+      ? "Places provider unavailable; please try again."
+      : undefined;
+    const status = providerErrorMessage
+      ? "ERROR"
+      : resultCount === 0
+        ? "NO_RESULTS"
+        : "OK";
 
     await writeRecommendationEvent(
       {
@@ -509,14 +519,16 @@ export async function POST(request: Request) {
         latencyMs: Date.now() - recommendationStart,
         resultCount,
         recommendedPlaceIds,
+        errorMessage: providerErrorMessage,
         parsedConstraints,
       },
     );
 
     const message =
-      resultCount > 0
+      providerErrorMessage ??
+      (resultCount > 0
         ? "Here are a few spots you might like."
-        : "Sorry, I couldn't find any places for that query.";
+        : "Sorry, I couldn't find any places for that query.");
 
     return respondChat(200, {
       primary: primary ?? null,
@@ -528,6 +540,13 @@ export async function POST(request: Request) {
         source: "internal",
         toolCallCount: 0,
         latencyMs: Date.now() - recommendationStart,
+        errorMessage: providerErrorMessage,
+        debug: providerErrorMessage
+          ? {
+              provider: recommendationDebug?.tool?.provider,
+              error: recommendationDebug?.tool?.error_message,
+            }
+          : undefined,
       },
     });
   } catch (fallbackError) {

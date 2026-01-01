@@ -30,17 +30,21 @@ start without Telegram or RAG configured.
 
 ### Places provider configuration
 
+FoodBuddy auto-selects a places provider:
+
+- If `COMPOSIO_MCP_URL` **and** `COMPOSIO_API_KEY` are set, it uses MCP.
+- Otherwise, if `GOOGLE_MAPS_API_KEY` is set, it uses Google Places API.
+- If neither is configured, the app returns a clear provider-unavailable error.
+
 **Direct Google API mode**
 
 ```bash
-GOOGLE_PROVIDER=API
 GOOGLE_MAPS_API_KEY=your_google_maps_key
 ```
 
 **Composio MCP mode (recommended)**
 
 ```bash
-GOOGLE_PROVIDER=MCP
 COMPOSIO_MCP_URL=https://your-composio-mcp.example.com
 COMPOSIO_API_KEY=your_composio_api_key
 ```
@@ -118,4 +122,9 @@ npm run start
 
 - **Database errors**: ensure your database is running and `DATABASE_URL` is set.
 - **Places data missing**: confirm your provider settings and API/MCP credentials.
+- **MCP 406 Not Acceptable**: ensure the MCP gateway accepts
+  `Accept: application/json, text/event-stream`.
+- **MCP 400 Parse error / JSON-RPC**: verify the MCP payload is JSON-RPC 2.0
+  (`jsonrpc`, `id`, `method`, `params`).
+- **Provider health**: check `/api/health/places` for MCP tool availability.
 - **Missing integrations**: check feature flags in `.env`.

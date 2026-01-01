@@ -1,5 +1,5 @@
 import { logger } from "../logger";
-import { extractJsonFromSse } from "./sseParser";
+import { extractJsonFromSse, isLikelySse } from "./sseParser";
 import type { JsonRpcResponse, ListToolsResult, ToolDefinition } from "./types";
 
 type McpCallOptions = {
@@ -7,6 +7,7 @@ type McpCallOptions = {
   apiKey: string;
   method: string;
   params?: Record<string, unknown>;
+  requestId?: string;
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -57,16 +58,28 @@ export const mcpCall = async <T>({
   apiKey,
   method,
   params,
+  requestId,
 }: McpCallOptions): Promise<T | null> => {
-  const requestId = buildRequestId();
+  const rpcRequestId = requestId ? `${requestId}:${buildRequestId()}` : buildRequestId();
   const payload = {
     jsonrpc: "2.0",
-    id: requestId,
+    id: rpcRequestId,
     method,
     params: params ?? {},
   };
 
-  logger.debug({ method, requestId, url }, "MCP request started");
+  logger.info(
+    {
+      method,
+      requestId,
+      rpcRequestId,
+      url: redactUrl(url),
+      payloadShape: {
+        paramsKeys: Object.keys(payload.params ?? {}),
+      },
+    },
+    "MCP request started",
+  );
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
@@ -77,10 +90,12 @@ export const mcpCall = async <T>({
       Accept: "application/json, text/event-stream",
       "Content-Type": "application/json",
       "Cache-Control": "no-cache",
-      "x-api-key": apiKey,
     };
+    if (apiKey) {
+      headers["x-api-key"] = apiKey;
+    }
     logger.debug(
-      { accept: headers.Accept, method, requestId },
+      { accept: headers.Accept, contentType: headers["Content-Type"], method, requestId },
       "MCP request headers prepared",
     );
 
@@ -91,7 +106,7 @@ export const mcpCall = async <T>({
       signal: controller.signal,
     });
   } catch (err) {
-    logger.error({ err, method, requestId, url }, "MCP request failed to send");
+    logger.error({ err, method, requestId, url: redactUrl(url) }, "MCP request failed to send");
     if (err instanceof Error) {
       throw err;
     }
@@ -112,10 +127,25 @@ export const mcpCall = async <T>({
       },
       "MCP response not ok",
     );
-    return null;
+    const error = new Error(
+      `MCP request failed: ${response.status} ${response.statusText || "Unknown error"}`,
+    ) as Error & { status?: number; responseText?: string };
+    error.status = response.status;
+    error.responseText = responseText.slice(0, 500);
+    throw error;
   }
 
   const contentType = response.headers.get("content-type") ?? "";
+  logger.info(
+    {
+      method,
+      requestId,
+      rpcRequestId,
+      status: response.status,
+      contentType,
+    },
+    "MCP response received",
+  );
   const responseText = contentType.toLowerCase().includes("text/event-stream")
     ? await readEventStream(response)
     : await response.text();
@@ -123,6 +153,8 @@ export const mcpCall = async <T>({
   let data: JsonRpcResponse<T> | null = null;
   try {
     if (contentType.toLowerCase().includes("text/event-stream")) {
+      data = extractJsonFromSse(responseText) as JsonRpcResponse<T>;
+    } else if (isLikelySse(responseText, contentType)) {
       data = extractJsonFromSse(responseText) as JsonRpcResponse<T>;
     } else {
       data = JSON.parse(responseText) as JsonRpcResponse<T>;
@@ -164,16 +196,18 @@ export const mcpCall = async <T>({
     throw new Error("MCP response missing result");
   }
 
-  logger.debug({ method, requestId }, "MCP request completed");
+  logger.debug({ method, requestId, rpcRequestId }, "MCP request completed");
   return data.result as T;
 };
 
 export const listMcpTools = async ({
   url,
   apiKey,
+  requestId,
 }: {
   url: string;
   apiKey: string;
+  requestId?: string;
 }): Promise<ToolDefinition[]> => {
   const now = Date.now();
   if (
@@ -190,6 +224,7 @@ export const listMcpTools = async ({
     apiKey,
     method: "tools/list",
     params: {},
+    requestId,
   });
 
   const resolvedResult: ListToolsResult = {

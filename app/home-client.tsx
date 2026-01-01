@@ -12,6 +12,8 @@ import type { ChatResponse, RecommendationCardData } from "../lib/types/chat";
 type ChatMessage = MessageBubbleData & {
   recommendations?: RecommendationCardData[];
   status?: ChatResponse["status"];
+  providerError?: boolean;
+  errorMessage?: string;
 };
 
 const isRecommendationCard = (
@@ -260,12 +262,16 @@ export default function HomePageClient() {
         setFeedbackPromptVisible(false);
       }
 
+      const providerError = data.status === "ERROR" && Boolean(data.meta?.errorMessage);
       const assistantMessage: ChatMessage = {
         id: createId(),
         role: "assistant",
         content: data.message ?? "Here are a few places to consider.",
         recommendations,
         status: data.status,
+        providerError,
+        errorMessage: data.meta?.errorMessage,
+        error: data.status === "ERROR",
         createdAt: Date.now(),
       };
 
@@ -441,6 +447,11 @@ export default function HomePageClient() {
                         searching a nearby neighborhood.
                       </div>
                     )}
+                  {message.role === "assistant" && message.providerError && (
+                    <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                      Places provider unavailable. Please try again in a moment.
+                    </div>
+                  )}
                 </MessageBubble>
                 <div className="h-px w-full bg-slate-100" />
               </div>

@@ -1,12 +1,19 @@
 import { NextResponse } from "next/server";
 import { prisma } from "../../../../../../lib/db";
-import { getPlacesProvider } from "../../../../../../lib/places";
+import { resolvePlacesProvider } from "../../../../../../lib/places";
 
 export const POST = async (
   _request: Request,
   { params }: { params: Promise<{ placeId: string }> },
 ) => {
-  const provider = getPlacesProvider();
+  const selection = resolvePlacesProvider();
+  if (!selection.provider) {
+    return NextResponse.json(
+      { ok: false, error: selection.reason ?? "Places provider unavailable." },
+      { status: 503 },
+    );
+  }
+  const provider = selection.provider;
   const { placeId } = await params;
   const details = await provider.placeDetails(placeId);
 

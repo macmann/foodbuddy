@@ -1,6 +1,5 @@
 import "server-only";
 
-import { getConfig } from "../config";
 import { logger } from "../logger";
 import { listMcpTools, mcpCall } from "../mcp/client";
 import type { ToolDefinition } from "../mcp/types";
@@ -108,9 +107,11 @@ const extractLatLng = (payload: unknown): { lat?: number; lng?: number } => {
   return {};
 };
 
-const buildMapsUrl = (name: string, lat?: number, lng?: number): string => {
-  const query = lat !== undefined && lng !== undefined ? `${name} ${lat},${lng}` : name;
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+const buildMapsUrl = (placeId?: string): string | undefined => {
+  if (!placeId) {
+    return undefined;
+  }
+  return `https://www.google.com/maps/place/?q=place_id:${encodeURIComponent(placeId)}`;
 };
 
 const normalizePlace = (payload: Record<string, unknown>): PlaceCandidate | null => {
@@ -171,7 +172,7 @@ const normalizePlace = (payload: Record<string, unknown>): PlaceCandidate | null
     priceLevel,
     types,
     address,
-    mapsUrl: mapsUrl ?? buildMapsUrl(name ?? "place", lat, lng),
+    mapsUrl: mapsUrl ?? buildMapsUrl(placeId ?? undefined),
     openNow,
   };
 };
@@ -205,20 +206,20 @@ const extractPlacesArray = (payload: unknown): Record<string, unknown>[] => {
 
 export class ComposioMcpProvider implements PlacesProvider {
   constructor(
-    private readonly url = getConfig().COMPOSIO_MCP_URL!,
-    private readonly apiKey = getConfig().COMPOSIO_API_KEY!,
+    private readonly url: string,
+    private readonly apiKey: string,
   ) {
     void this.listTools().catch((err) => {
       logger.debug({ err }, "Composio MCP tool listing warmup failed");
     });
   }
 
-  async geocode(text: string): Promise<Coordinates | null> {
-    const requestId = buildRequestId();
+  async geocode(text: string, requestId?: string): Promise<Coordinates | null> {
+    const resolvedRequestId = requestId ?? buildRequestId();
     try {
       const tools = await this.resolveTools();
       const args = this.buildGeocodeArgs(tools.geocode, text);
-      const result = await this.callTool(tools.geocode.name, args, requestId);
+      const result = await this.callTool(tools.geocode.name, args, resolvedRequestId);
       const location = extractLatLng(result ?? {});
       if (location.lat === undefined || location.lng === undefined) {
         return null;
@@ -232,13 +233,13 @@ export class ComposioMcpProvider implements PlacesProvider {
         ),
       };
     } catch (err) {
-      logger.error({ err, requestId }, "Composio MCP geocode failed");
+      logger.error({ err, requestId: resolvedRequestId }, "Composio MCP geocode failed");
       return null;
     }
   }
 
   async nearbySearch(params: NearbySearchParams): Promise<NearbySearchResponse> {
-    const requestId = buildRequestId();
+    const requestId = params.requestId ?? buildRequestId();
     try {
       const tools = await this.resolveTools();
       const args = this.buildNearbySearchArgs(tools.nearbySearch, params);
@@ -257,6 +258,7 @@ export class ComposioMcpProvider implements PlacesProvider {
       lng: params.lng,
       radiusMeters: 5000,
       keyword: params.query,
+      requestId: params.requestId,
     });
   }
 
@@ -411,6 +413,7 @@ export class ComposioMcpProvider implements PlacesProvider {
         apiKey: this.apiKey,
         method: "tools/call",
         params: { name, arguments: args },
+        requestId,
       });
 
     try {

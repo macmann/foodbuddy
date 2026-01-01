@@ -7,7 +7,7 @@ import type {
 } from "./types";
 
 export interface PlacesProvider {
-  geocode(text: string): Promise<Coordinates | null>;
+  geocode(text: string, requestId?: string): Promise<Coordinates | null>;
   nearbySearch(params: NearbySearchParams): Promise<NearbySearchResponse>;
   textSearch(params: TextSearchParams): Promise<NearbySearchResponse>;
   placeDetails(placeId: string): Promise<PlaceDetails | null>;

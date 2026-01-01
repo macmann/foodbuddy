@@ -325,11 +325,15 @@ export const runFoodBuddyAgent = async ({
   }
 
   const hasPlaces = places.length > 0;
+  const providerErrorMessage = errorMessage
+    ? "Places provider unavailable; please try again."
+    : undefined;
   const message = hasPlaces
     ? parsedOutput?.final_answer_text ||
       lastAssistantText ||
       "Here are a few places that could work. Let me know if you want more options."
-    : "I couldn’t find places nearby for that request. Try widening the radius or a different keyword.";
+    : providerErrorMessage ??
+      "I couldn’t find places nearby for that request. Try widening the radius or a different keyword.";
 
   return buildAgentResult({
     message,
@@ -344,6 +348,7 @@ export const runFoodBuddyAgent = async ({
     },
     parsedOutput,
     toolDebug,
+    statusOverride: providerErrorMessage ? "ERROR" : undefined,
   });
 };
 
@@ -428,6 +433,7 @@ const buildAgentResult = ({
   rawResponse,
   parsedOutput,
   toolDebug,
+  statusOverride,
 }: {
   message: string;
   places: RecommendationCardData[];
@@ -438,10 +444,11 @@ const buildAgentResult = ({
   rawResponse: Record<string, unknown>;
   parsedOutput?: ParsedAgentOutput;
   toolDebug?: Record<string, unknown>;
+  statusOverride?: AgentResult["status"];
 }): AgentResult => {
   const primary = places[0] ?? null;
   const alternatives = places.slice(1, MAX_RECOMMENDATIONS);
-  const status = places.length > 0 ? "OK" : "NO_RESULTS";
+  const status = statusOverride ?? (places.length > 0 ? "OK" : "NO_RESULTS");
 
   return {
     message: message.trim(),

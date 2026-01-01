@@ -1,7 +1,7 @@
 import { logger } from "../logger";
 import { listMcpTools, mcpCall } from "../mcp/client";
 import type { ToolDefinition } from "../mcp/types";
-import { getPlacesProvider } from "../places";
+import { resolvePlacesProvider } from "../places";
 import type { Coordinates, PlaceCandidate } from "../places";
 import { haversineMeters } from "../reco/scoring";
 import { parseQuery, recommend } from "../reco/engine";
@@ -39,6 +39,14 @@ type ToolHandler = (
 ) => Promise<Record<string, unknown>>;
 
 const MAX_RECOMMENDATIONS = 3;
+const MIN_RADIUS_METERS = 500;
+const MAX_RADIUS_METERS = 10_000;
+const DEFAULT_RADIUS_METERS = 1500;
+
+const clampRadiusMeters = (radius?: number): number => {
+  const candidate = typeof radius === "number" && Number.isFinite(radius) ? radius : DEFAULT_RADIUS_METERS;
+  return Math.min(MAX_RADIUS_METERS, Math.max(MIN_RADIUS_METERS, Math.round(candidate)));
+};
 
 const normalizeCandidate = (
   candidate: PlaceCandidate,
@@ -136,9 +144,11 @@ const extractLatLng = (payload: Record<string, unknown>): { lat?: number; lng?: 
   return {};
 };
 
-const buildMapsUrl = (name: string, lat?: number, lng?: number): string => {
-  const query = lat !== undefined && lng !== undefined ? `${name} ${lat},${lng}` : name;
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+const buildMapsUrl = (placeId?: string): string | undefined => {
+  if (!placeId) {
+    return undefined;
+  }
+  return `https://www.google.com/maps/place/?q=place_id:${encodeURIComponent(placeId)}`;
 };
 
 const extractPlacesArray = (payload: unknown): Record<string, unknown>[] => {
@@ -201,7 +211,7 @@ const normalizeMcpPlace = (
       payload.url,
       payload.googleMapsUrl,
       payload.googleMapsUri,
-    ) ?? buildMapsUrl(name ?? "place", lat, lng);
+    ) ?? buildMapsUrl(placeId ?? undefined);
   const openNow =
     typeof payload.openNow === "boolean"
       ? payload.openNow
@@ -230,10 +240,13 @@ const normalizeMcpPlace = (
   };
 };
 
-const buildMcpFallbackResult = ({ errorMessage }: { errorMessage: string }): Record<
-  string,
-  unknown
-> => {
+const buildProviderFallbackResult = ({
+  errorMessage,
+  providerName = "MCP",
+}: {
+  errorMessage: string;
+  providerName?: string;
+}): Record<string, unknown> => {
   return {
     results: [],
     meta: {
@@ -241,9 +254,9 @@ const buildMcpFallbackResult = ({ errorMessage }: { errorMessage: string }): Rec
       errorMessage,
     },
     debug: {
-      error: "mcp_failed",
+      error: "provider_failed",
       tool: {
-        provider: "MCP",
+        provider: providerName,
         error_message: errorMessage,
       },
     },
@@ -311,7 +324,14 @@ const nearbySearch = async (
   args: NearbySearchArgs,
   context: AgentToolContext,
 ): Promise<Record<string, unknown>> => {
-  const provider = getPlacesProvider();
+  const selection = resolvePlacesProvider();
+  if (!selection.provider) {
+    return {
+      results: [],
+      debug: { error: selection.reason ?? "Places provider unavailable." },
+    };
+  }
+  const provider = selection.provider;
   const latitude = args.latitude ?? context.location?.lat;
   const longitude = args.longitude ?? context.location?.lng;
 
@@ -320,7 +340,9 @@ const nearbySearch = async (
   }
 
   const parsed = parseQuery(args.query);
-  const initialRadiusMeters = args.radius_m ?? context.radius_m ?? parsed.radiusMeters;
+  const initialRadiusMeters = clampRadiusMeters(
+    args.radius_m ?? context.radius_m ?? parsed.radiusMeters,
+  );
   const retryRadii =
     initialRadiusMeters <= 1000 ? [initialRadiusMeters, 3000, 8000] : [initialRadiusMeters];
 
@@ -375,32 +397,30 @@ const recommendInternal = async (
   context: AgentToolContext,
 ): Promise<Record<string, unknown>> => {
   try {
-    const providerName = process.env.GOOGLE_PROVIDER ?? "GOOGLE_MAPS";
-    const isMcpProvider = providerName === "MCP";
+    const parsed = parseQuery(args.query);
+    const initialRadiusMeters = clampRadiusMeters(context.radius_m ?? parsed.radiusMeters);
+    const locationText = args.location ?? parsed.locationText;
+    const selection = resolvePlacesProvider();
+    const providerName = selection.providerName;
+    const provider = selection.provider;
     const mcpUrl = (process.env.COMPOSIO_MCP_URL ?? "").trim().replace(/^"+|"+$/g, "");
-    const composioApiKey = process.env.COMPOSIO_API_KEY;
-    const hasComposioKey = Boolean(composioApiKey);
-    const hasComposioUrl = mcpUrl.length > 0;
-    const envHasGoogleKey = Boolean(
-      process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_API_KEY,
-    );
+    const composioApiKey = process.env.COMPOSIO_API_KEY ?? "";
 
-    if (isMcpProvider && hasComposioUrl && !mcpUrl.startsWith("http")) {
+    if (providerName === "MCP" && mcpUrl && !mcpUrl.startsWith("http")) {
       throw new Error("COMPOSIO_MCP_URL must start with http:// or https://");
     }
 
     let location: Coordinates | null = null;
     if (context.location) {
       location = context.location;
-    } else if (args.location) {
-      if (!isMcpProvider || (hasComposioKey && hasComposioUrl)) {
-        const provider = getPlacesProvider();
-        location = await provider.geocode(args.location);
-      }
     }
 
-    const parsed = parseQuery(args.query);
-    const initialRadiusMeters = context.radius_m ?? parsed.radiusMeters;
+    if (locationText && provider) {
+      const geocoded = await provider.geocode(locationText, context.requestId);
+      if (geocoded) {
+        location = { lat: geocoded.lat, lng: geocoded.lng };
+      }
+    }
 
     logger.info(
       {
@@ -413,16 +433,15 @@ const recommendInternal = async (
         keyword: parsed.keyword,
         rawMessage: context.rawMessage ?? args.query,
         locationEnabled: context.locationEnabled,
-        hasComposioKey,
-        hasComposioUrl,
-        hasGoogleMapsKey: envHasGoogleKey,
+        locationText,
       },
       "recommend_places request",
     );
 
-    if (isMcpProvider && (!hasComposioKey || !hasComposioUrl)) {
-      return buildMcpFallbackResult({
-        errorMessage: "Missing COMPOSIO_MCP_URL or COMPOSIO_API_KEY for MCP provider.",
+    if (providerName === "NONE" || !provider) {
+      return buildProviderFallbackResult({
+        errorMessage: selection.reason ?? "Places provider unavailable; please try again.",
+        providerName,
       });
     }
 
@@ -433,13 +452,20 @@ const recommendInternal = async (
       };
     }
 
-    if (isMcpProvider) {
+    if (providerName === "MCP") {
       const keyword = parsed.keyword ?? args.query;
       try {
-        const tools = await listMcpTools({ url: mcpUrl, apiKey: composioApiKey! });
+        const tools = await listMcpTools({
+          url: mcpUrl,
+          apiKey: composioApiKey,
+          requestId: context.requestId,
+        });
         const tool = resolveNearbySearchTool(tools);
         if (!tool) {
-          throw new Error("Unable to resolve MCP nearby search tool.");
+          const available = tools.map((item) => item.name).join(", ");
+          throw new Error(
+            `Unable to resolve MCP nearby search tool. Available tools: ${available || "(none)"}`,
+          );
         }
 
         const toolArgs = buildNearbySearchArgs(tool, {
@@ -451,9 +477,10 @@ const recommendInternal = async (
 
         const payload = await mcpCall<unknown>({
           url: mcpUrl,
-          apiKey: composioApiKey!,
+          apiKey: composioApiKey,
           method: "tools/call",
           params: { name: tool.name, arguments: toolArgs },
+          requestId: context.requestId,
         });
 
         const places = extractPlacesArray(payload);
@@ -461,20 +488,21 @@ const recommendInternal = async (
           .map((place) => normalizeMcpPlace(place, location!))
           .filter(Boolean) as RecommendationCardData[];
 
+        logger.info(
+          {
+            requestId: context.requestId,
+            provider: "MCP",
+            resultsCount: normalized.length,
+          },
+          "MCP recommend_places results parsed",
+        );
+
         return { results: normalized };
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : "Unknown MCP error.";
         logger.warn({ err, requestId: context.requestId }, "Composio MCP recommend_places failed");
-        return buildMcpFallbackResult({ errorMessage });
+        return buildProviderFallbackResult({ errorMessage, providerName });
       }
-    }
-
-    if (!envHasGoogleKey) {
-      return {
-        results: [],
-        places: [],
-        debug: { error: "Missing Google API key env var" },
-      };
     }
 
     const response = await recommend({
@@ -514,9 +542,10 @@ const recommendInternal = async (
     const errorMessage =
       err instanceof Error ? err.message : "Unknown error during recommend_places.";
     logger.error({ err, requestId: context.requestId }, "recommend_places failed");
-    if (process.env.GOOGLE_PROVIDER === "MCP") {
-      return buildMcpFallbackResult({
+    if (resolvePlacesProvider().providerName === "MCP") {
+      return buildProviderFallbackResult({
         errorMessage,
+        providerName: "MCP",
       });
     }
     return { results: [], debug: { error: "recommend_places_failed" } };
@@ -525,10 +554,14 @@ const recommendInternal = async (
 
 const geocodeLocation = async (
   args: GeocodeArgs,
-  _context: AgentToolContext,
+  context: AgentToolContext,
 ): Promise<Record<string, unknown>> => {
-  const provider = getPlacesProvider();
-  const coords = await provider.geocode(args.place);
+  const selection = resolvePlacesProvider();
+  if (!selection.provider) {
+    return { error: selection.reason ?? "Places provider unavailable." };
+  }
+  const provider = selection.provider;
+  const coords = await provider.geocode(args.place, context.requestId);
   return { coordinates: coords };
 };
 

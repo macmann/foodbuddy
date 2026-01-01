@@ -1,4 +1,5 @@
 import { logger } from "../logger";
+import { mcpCall } from "../mcp/client";
 import type { PlacesProvider } from "./provider";
 import type {
   Coordinates,
@@ -15,13 +16,11 @@ type JsonRpcResponse<T> = {
 };
 
 export class McpPlacesProvider implements PlacesProvider {
-  private requestId = 0;
-
   constructor(private readonly endpoint: string) {}
 
-  async geocode(text: string): Promise<Coordinates | null> {
+  async geocode(text: string, requestId?: string): Promise<Coordinates | null> {
     try {
-      const result = await this.call<Coordinates | null>("geocode", { text });
+      const result = await this.call<Coordinates | null>("geocode", { text }, requestId);
       return result ?? null;
     } catch (err) {
       logger.error({ err }, "MCP geocode failed");
@@ -31,7 +30,7 @@ export class McpPlacesProvider implements PlacesProvider {
 
   async nearbySearch(params: NearbySearchParams): Promise<NearbySearchResponse> {
     try {
-      const result = await this.call<PlaceCandidate[]>("nearbySearch", params);
+      const result = await this.call<PlaceCandidate[]>("nearbySearch", params, params.requestId);
       const results = Array.isArray(result) ? result : [];
       return { results };
     } catch (err) {
@@ -42,7 +41,7 @@ export class McpPlacesProvider implements PlacesProvider {
 
   async textSearch(params: TextSearchParams): Promise<NearbySearchResponse> {
     try {
-      const result = await this.call<PlaceCandidate[]>("textSearch", params);
+      const result = await this.call<PlaceCandidate[]>("textSearch", params, params.requestId);
       const results = Array.isArray(result) ? result : [];
       return { results };
     } catch (err) {
@@ -61,31 +60,18 @@ export class McpPlacesProvider implements PlacesProvider {
     }
   }
 
-  private async call<T>(method: string, params: Record<string, unknown>): Promise<T | null> {
-    const payload = {
-      jsonrpc: "2.0",
-      id: ++this.requestId,
+  private async call<T>(
+    method: string,
+    params: Record<string, unknown>,
+    requestId?: string,
+  ): Promise<T | null> {
+    const data = await mcpCall<JsonRpcResponse<T>["result"]>({
+      url: this.endpoint,
+      apiKey: "",
       method,
       params,
-    };
-
-    const response = await fetch(this.endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      requestId,
     });
-
-    if (!response.ok) {
-      logger.error({ status: response.status }, "MCP request failed");
-      return null;
-    }
-
-    const data = (await response.json()) as JsonRpcResponse<T>;
-    if (data.error) {
-      logger.error({ err: data.error }, "MCP response error");
-      return null;
-    }
-
-    return data.result ?? null;
+    return (data as T | null) ?? null;
   }
 }
