@@ -15,6 +15,9 @@ import type {
   RecommendationCardData,
 } from "../../../lib/types/chat";
 
+export const maxDuration = 60;
+export const dynamic = "force-dynamic";
+
 type ChatRequestBody = {
   anonId: string;
   sessionId: string;
@@ -30,6 +33,9 @@ type ChatRequestBody = {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
+
+const isAbortError = (error: unknown) =>
+  error instanceof Error && error.name === "AbortError";
 
 type Attempt = {
   radius: number;
@@ -348,6 +354,7 @@ export async function POST(request: Request) {
   }
 
   let settings: Awaited<ReturnType<typeof getLLMSettings>> | undefined;
+  let llmTimedOut = false;
   try {
     settings = await getLLMSettings();
 
@@ -419,102 +426,120 @@ export async function POST(request: Request) {
         "Routing chat to agent",
       );
       const agentStart = Date.now();
-      const agentResult = await runFoodBuddyAgent({
-        userMessage: body.message,
-        context: {
-          location: geoLocation,
-          radius_m,
-          sessionId: body.sessionId,
-          requestId,
-          userIdHash,
-          channel,
-          locale: locale ?? undefined,
-          locationEnabled,
-        },
-      });
-
-      const recommendations =
-        agentResult.places && agentResult.places.length > 0
-          ? agentResult.places
-          : [agentResult.primary, ...(agentResult.alternatives ?? [])].filter(
-              (item): item is RecommendationCardData => Boolean(item),
-            );
-      const resultCount = recommendations.length;
-      const status = agentResult.status;
-      const parsedConstraints = parseQuery(body.message);
-      const rawResponseJson = truncateJson(
-        JSON.stringify({
-          assistant: agentResult.message,
-          toolCallCount: agentResult.toolCallCount,
-          parsedOutput: agentResult.parsedOutput,
-          toolResponses: agentResult.rawResponse,
-        }),
-      );
-      const toolInfo = buildToolDebug(
-        isRecord(agentResult.toolDebug) ? agentResult.toolDebug : undefined,
-      );
-      if (toolInfo || agentResult.toolCallCount > 0) {
-        logger.info(
-          {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 25_000);
+      let agentResult: Awaited<ReturnType<typeof runFoodBuddyAgent>> | null = null;
+      try {
+        agentResult = await runFoodBuddyAgent({
+          userMessage: body.message,
+          context: {
+            location: geoLocation,
+            radius_m,
+            sessionId: body.sessionId,
             requestId,
-            tool: "recommend_places",
-            returnedCount: resultCount,
-            googleStatusIfAny: toolInfo?.googleStatus,
-            errorIfAny: toolInfo?.error_message,
+            userIdHash,
+            channel,
+            locale: locale ?? undefined,
+            locationEnabled,
           },
-          "Tool result summary",
-        );
+          signal: controller.signal,
+        });
+      } catch (err) {
+        if (isAbortError(err)) {
+          llmTimedOut = true;
+          reason = "llm_timeout";
+          logger.info({ ...logContext, reason, requestId }, "LLM request timed out");
+        } else {
+          throw err;
+        }
+      } finally {
+        clearTimeout(timeout);
       }
 
-      await writeRecommendationEvent(
-        {
-          channel: "WEB",
-          userIdHash,
-          location: eventLocation,
-          queryText: body.message,
-          requestId,
-          locationEnabled,
-          radiusMeters,
-          source: "agent",
-          agentEnabled,
-          llmModel,
-          toolCallCount: agentResult.toolCallCount,
-          fallbackUsed: agentResult.fallbackUsed,
-          rawResponseJson,
-        },
-        {
-          status,
-          latencyMs: Date.now() - agentStart,
-          resultCount,
-          recommendedPlaceIds: recommendations.map((item) => item.placeId),
-          parsedConstraints: {
-            ...parsedConstraints,
-            llm: agentResult.parsedOutput ?? null,
+      if (agentResult) {
+        const recommendations =
+          agentResult.places && agentResult.places.length > 0
+            ? agentResult.places
+            : [agentResult.primary, ...(agentResult.alternatives ?? [])].filter(
+                (item): item is RecommendationCardData => Boolean(item),
+              );
+        const resultCount = recommendations.length;
+        const status = agentResult.status;
+        const parsedConstraints = parseQuery(body.message);
+        const rawResponseJson = truncateJson(
+          JSON.stringify({
+            assistant: agentResult.message,
+            toolCallCount: agentResult.toolCallCount,
+            parsedOutput: agentResult.parsedOutput,
+            toolResponses: agentResult.rawResponse,
+          }),
+        );
+        const toolInfo = buildToolDebug(
+          isRecord(agentResult.toolDebug) ? agentResult.toolDebug : undefined,
+        );
+        if (toolInfo || agentResult.toolCallCount > 0) {
+          logger.info(
+            {
+              requestId,
+              tool: "recommend_places",
+              returnedCount: resultCount,
+              googleStatusIfAny: toolInfo?.googleStatus,
+              errorIfAny: toolInfo?.error_message,
+            },
+            "Tool result summary",
+          );
+        }
+
+        await writeRecommendationEvent(
+          {
+            channel: "WEB",
+            userIdHash,
+            location: eventLocation,
+            queryText: body.message,
+            requestId,
+            locationEnabled,
+            radiusMeters,
+            source: "agent",
+            agentEnabled,
+            llmModel,
+            toolCallCount: agentResult.toolCallCount,
+            fallbackUsed: agentResult.fallbackUsed,
+            rawResponseJson,
           },
-        },
-      );
+          {
+            status,
+            latencyMs: Date.now() - agentStart,
+            resultCount,
+            recommendedPlaceIds: recommendations.map((item) => item.placeId),
+            parsedConstraints: {
+              ...parsedConstraints,
+              llm: agentResult.parsedOutput ?? null,
+            },
+          },
+        );
 
-      logger.info(
-        { ...logContext, latencyMs: Date.now() - agentStart },
-        "Agent response complete",
-      );
+        logger.info(
+          { ...logContext, latencyMs: Date.now() - agentStart },
+          "Agent response complete",
+        );
 
-      return respondChat(
-        200,
-        buildAgentResponse({
-          agentMessage: agentResult.message,
-          recommendations,
-          status,
-          toolCallCount: agentResult.toolCallCount,
-          requestId,
-          llmModel,
-          fallbackUsed: agentResult.fallbackUsed,
-          errorMessage: agentResult.errorMessage,
-          latencyMs: Date.now() - agentStart,
-          debugEnabled,
-          toolDebug: agentResult.toolDebug,
-        }),
-      );
+        return respondChat(
+          200,
+          buildAgentResponse({
+            agentMessage: agentResult.message,
+            recommendations,
+            status,
+            toolCallCount: agentResult.toolCallCount,
+            requestId,
+            llmModel,
+            fallbackUsed: agentResult.fallbackUsed,
+            errorMessage: agentResult.errorMessage,
+            latencyMs: Date.now() - agentStart,
+            debugEnabled,
+            toolDebug: agentResult.toolDebug,
+          }),
+        );
+      }
     }
 
     logger.info(
@@ -575,7 +600,7 @@ export async function POST(request: Request) {
       primary: null,
       alternatives: [],
       message,
-      status: "ERROR",
+      status: llmTimedOut ? "fallback" : "ERROR",
       places: [],
       meta: {
         source: "internal",
@@ -616,6 +641,7 @@ export async function POST(request: Request) {
       : resultCount === 0
         ? "NO_RESULTS"
         : "OK";
+    const responseStatus = llmTimedOut ? "fallback" : status;
 
     await writeRecommendationEvent(
       {
@@ -659,7 +685,7 @@ export async function POST(request: Request) {
       primary: primary ?? null,
       alternatives,
       message,
-      status,
+      status: responseStatus,
       places: payload,
       meta: {
         source: "internal",

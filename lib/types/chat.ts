@@ -47,7 +47,7 @@ export type ChatResponseDebug = {
 
 export type ChatResponse = {
   message: string;
-  status: "OK" | "NO_RESULTS" | "ERROR";
+  status: "OK" | "NO_RESULTS" | "ERROR" | "fallback";
   primary: RecommendationCardData | null;
   alternatives: RecommendationCardData[];
   places: RecommendationCardData[];

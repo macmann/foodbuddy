@@ -32,6 +32,7 @@ type CallLlmInput = {
   };
   requestId?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1";
@@ -59,13 +60,32 @@ export const callOpenAI = async ({
   settings,
   requestId,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  signal,
 }: CallLlmInput): Promise<LlmResponse> => {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY is required to call the LLM");
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutController = new AbortController();
+  const timeout = setTimeout(() => timeoutController.abort(), timeoutMs);
+  let combinedSignal = timeoutController.signal;
+  let cleanupSignal = () => {};
+
+  if (signal) {
+    const combinedController = new AbortController();
+    const abortCombined = () => combinedController.abort();
+    if (signal.aborted) {
+      combinedController.abort();
+    } else {
+      signal.addEventListener("abort", abortCombined);
+    }
+    timeoutController.signal.addEventListener("abort", abortCombined);
+    combinedSignal = combinedController.signal;
+    cleanupSignal = () => {
+      signal.removeEventListener("abort", abortCombined);
+      timeoutController.signal.removeEventListener("abort", abortCombined);
+    };
+  }
   const start = Date.now();
   const model = normalizeModel(settings.llmModel);
 
@@ -99,7 +119,7 @@ export const callOpenAI = async ({
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
-      signal: controller.signal,
+      signal: combinedSignal,
     });
 
     if (!response.ok) {
@@ -160,6 +180,7 @@ export const callOpenAI = async ({
     return { assistantText: assistantText.trim(), toolCalls };
   } finally {
     clearTimeout(timeout);
+    cleanupSignal();
   }
 };
 
