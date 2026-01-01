@@ -128,3 +128,79 @@ test("recommend_places sends JSON-RPC with required headers", async () => {
     process.env.COMPOSIO_API_KEY = originalApiKey;
   }
 });
+
+test("recommend_places sends keyword using textQuery schema key", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalProvider = process.env.GOOGLE_PROVIDER;
+  const originalMcpUrl = process.env.COMPOSIO_MCP_URL;
+  const originalApiKey = process.env.COMPOSIO_API_KEY;
+
+  try {
+    process.env.GOOGLE_PROVIDER = "MCP";
+    process.env.COMPOSIO_MCP_URL = "https://example.com";
+    process.env.COMPOSIO_API_KEY = "test-api-key";
+
+    let capturedArgs: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (_input, init) => {
+      const body = init?.body ? JSON.parse(init.body.toString()) : null;
+
+      if (body.method === "tools/list") {
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: {
+              tools: [
+                {
+                  name: "google_maps_places_nearby_search",
+                  inputSchema: {
+                    properties: {
+                      textQuery: { type: "string" },
+                      latitude: { type: "number" },
+                      longitude: { type: "number" },
+                      radius_m: { type: "number" },
+                    },
+                  },
+                },
+              ],
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      capturedArgs = body?.params?.arguments ?? null;
+
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: {
+            results: [{ name: "Test Place", place_id: "abc123", lat: 1, lng: 2 }],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as typeof fetch;
+
+    await toolHandlers.recommend_places(
+      { query: "sushi" },
+      { location: { kind: "coords", coords: { lat: 40.7128, lng: -74.006 } } },
+    );
+
+    assert.equal(capturedArgs?.textQuery, "sushi");
+  } finally {
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+    process.env.GOOGLE_PROVIDER = originalProvider;
+    process.env.COMPOSIO_MCP_URL = originalMcpUrl;
+    process.env.COMPOSIO_API_KEY = originalApiKey;
+  }
+});
