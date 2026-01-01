@@ -27,6 +27,8 @@ export type NearbySearchParams = {
   lng: number;
   radiusMeters: number;
   keyword?: string;
+  includedTypes?: string | string[];
+  excludedTypes?: string | string[];
   openNow?: boolean;
   requestId?: string;
 };
