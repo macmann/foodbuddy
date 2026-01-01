@@ -1,7 +1,6 @@
 import { logger } from "../logger";
 import { getLocationCoords, getLocationText, type GeoLocation } from "../location";
 import { invalidateMcpToolsCache, listMcpTools, mcpCall } from "../mcp/client";
-import { extractPlacesFromMcpResult } from "../mcp/placesExtractor";
 import { resolveMcpPayloadFromResult } from "../mcp/resultParser";
 import { resolveMcpTools, selectSearchTool } from "../mcp/toolResolver";
 import type { ToolDefinition } from "../mcp/types";
@@ -178,79 +177,50 @@ const extractLatLng = (payload: unknown): { lat?: number; lng?: number } => {
   return {};
 };
 
-const buildMapsUrl = (placeId?: string): string | undefined => {
-  if (!placeId) {
-    return undefined;
-  }
-  return `https://www.google.com/maps/place/?q=place_id:${encodeURIComponent(placeId)}`;
-};
-
 const normalizeMcpPlace = (
   payload: Record<string, unknown>,
   origin?: Coordinates,
 ): RecommendationCardData | null => {
-  const displayName = payload.displayName;
+  const displayName = isRecord(payload.displayName) ? payload.displayName : undefined;
   const displayNameText =
-    isRecord(displayName) && typeof displayName.text === "string"
-      ? displayName.text
-      : undefined;
-  const displayNameAlt =
-    typeof payload.display_name === "string" ? payload.display_name : undefined;
-  const name = pickFirstString(
-    payload.name,
-    displayNameText,
-    displayNameAlt,
-  );
-  const placeId = pickFirstString(payload.placeId, payload.place_id, payload.id, payload.placeid);
-  const { lat, lng } = extractLatLng(payload);
+    typeof displayName?.text === "string" ? displayName.text : undefined;
+  const placeName = typeof payload.name === "string" ? payload.name : undefined;
+  const name = displayNameText ?? placeName;
 
-  if (!placeId && !name) {
+  if (!name) {
     return null;
   }
 
-  const rating = toNumber(payload.rating ?? payload.google_rating ?? payload.score);
-  const reviewCount = toNumber(
-    payload.userRatingsTotal ?? payload.user_ratings_total ?? payload.rating_count,
-  );
-  const priceLevel = toNumber(payload.priceLevel ?? payload.price_level);
-  const address = pickFirstString(
-    payload.address,
-    payload.formatted_address,
-    payload.formattedAddress,
-    payload.vicinity,
-  );
-  const mapsUrl =
-    pickFirstString(
-      payload.mapsUrl,
-      payload.url,
-      payload.googleMapsUrl,
-      payload.googleMapsUri,
-    ) ?? buildMapsUrl(placeId ?? undefined);
-  const openNow =
-    typeof payload.openNow === "boolean"
-      ? payload.openNow
-      : typeof payload.open_now === "boolean"
-        ? payload.open_now
+  const address =
+    typeof payload.formattedAddress === "string"
+      ? payload.formattedAddress
+      : typeof payload.shortFormattedAddress === "string"
+        ? payload.shortFormattedAddress
         : undefined;
+  const rating = typeof payload.rating === "number" ? payload.rating : undefined;
+  const reviewCount =
+    typeof payload.userRatingCount === "number" ? payload.userRatingCount : undefined;
+  const location = isRecord(payload.location) ? payload.location : undefined;
+  const lat = typeof location?.latitude === "number" ? location.latitude : undefined;
+  const lng = typeof location?.longitude === "number" ? location.longitude : undefined;
+  const mapsUrl =
+    typeof payload.googleMapsUri === "string" ? payload.googleMapsUri : undefined;
 
   const distanceMeters =
     origin && lat !== undefined && lng !== undefined
       ? haversineMeters(origin, { lat, lng })
       : undefined;
-
-  const normalizedPlaceId =
-    placeId ?? `${name ?? "place"}-${lat ?? ""}-${lng ?? ""}`.replace(/\s+/g, "-");
+  const placeId =
+    typeof payload.id === "string" ? payload.id : placeName ?? name;
 
   return {
-    placeId: normalizedPlaceId,
-    name: name ?? "Unknown",
+    placeId,
+    name,
     rating,
     reviewCount,
-    priceLevel,
     lat,
     lng,
     distanceMeters,
-    openNow,
     address,
     mapsUrl,
   };
@@ -554,21 +524,83 @@ const recommendInternal = async (
           });
         };
 
-        const parsePlaces = (payload: unknown) => {
-          const { places, contentText } = extractPlacesFromMcpResult(payload);
-          if (contentText) {
+        const parsePlaces = (
+          payload: unknown,
+        ): {
+          success: boolean;
+          error?: string;
+          places: RecommendationCardData[];
+          parsedCount: number;
+          mappedCount: number;
+        } => {
+          const { contentText } = resolveMcpPayloadFromResult(payload);
+          const rawText = contentText ?? "";
+          if (rawText) {
             logger.info(
               {
                 requestId: context.requestId,
                 provider: "MCP",
-                contentSnippet: contentText.slice(0, 300),
+                contentSnippet: rawText.slice(0, 300),
               },
               "MCP content text received",
             );
           }
-          return places
+
+          let parsed: unknown = null;
+          try {
+            parsed = rawText ? JSON.parse(rawText) : null;
+          } catch (error) {
+            logger.warn(
+              { error, requestId: context.requestId, provider: "MCP" },
+              "MCP content text JSON parse failed",
+            );
+          }
+
+          const placesCandidate = isRecord(parsed) ? parsed.data?.places : undefined;
+          if (!Array.isArray(placesCandidate)) {
+            return {
+              success: false,
+              error: "No places array",
+              places: [],
+              parsedCount: 0,
+              mappedCount: 0,
+            };
+          }
+
+          const mappedPlaces = placesCandidate
+            .filter((place): place is Record<string, unknown> => isRecord(place))
             .map((place) => normalizeMcpPlace(place, locationCoords))
             .filter((place): place is RecommendationCardData => Boolean(place));
+
+          logger.info(
+            {
+              requestId: context.requestId,
+              provider: "MCP",
+              parsedCount: placesCandidate.length,
+              mappedCount: mappedPlaces.length,
+            },
+            "MCP places parsed",
+          );
+
+          const limit = 20;
+          if (mappedPlaces.length > limit) {
+            logger.info(
+              {
+                requestId: context.requestId,
+                provider: "MCP",
+                preLimitCount: mappedPlaces.length,
+                limit,
+              },
+              "MCP places limited",
+            );
+          }
+
+          return {
+            success: true,
+            places: mappedPlaces.slice(0, limit),
+            parsedCount: placesCandidate.length,
+            mappedCount: mappedPlaces.length,
+          };
         };
 
         if (!locationCoords && locationText && resolvedTools.geocode) {
@@ -600,6 +632,8 @@ const recommendInternal = async (
         );
 
         let normalized: RecommendationCardData[] = [];
+        let parsedPlacesCount = 0;
+        let mappedPlacesCount = 0;
         const searchTool = selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
         if (searchTool) {
           for (const radiusMeters of retryRadii) {
@@ -618,7 +652,10 @@ const recommendInternal = async (
                   });
             try {
               const payload = await callTool(searchTool, toolArgs);
-              normalized = parsePlaces(payload);
+              const parsed = parsePlaces(payload);
+              normalized = parsed.places;
+              parsedPlacesCount = parsed.parsedCount;
+              mappedPlacesCount = parsed.mappedCount;
             } catch (err) {
               if (isUnknownToolError(err)) {
                 const refreshed = await refreshTools();
@@ -638,7 +675,8 @@ const recommendInternal = async (
           {
             requestId: context.requestId,
             provider: "MCP",
-            resultsCount: normalized.length,
+            resultsCount: mappedPlacesCount,
+            parsedCount: parsedPlacesCount,
           },
           "MCP recommend_places results parsed",
         );
