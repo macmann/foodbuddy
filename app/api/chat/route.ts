@@ -47,6 +47,7 @@ const buildAgentResponse = ({
   requestId,
   llmModel,
   fallbackUsed,
+  errorMessage,
   latencyMs,
   debugEnabled,
   toolDebug,
@@ -58,6 +59,7 @@ const buildAgentResponse = ({
   requestId: string;
   llmModel?: string | null;
   fallbackUsed?: boolean;
+  errorMessage?: string;
   latencyMs: number;
   debugEnabled: boolean;
   toolDebug?: Record<string, unknown>;
@@ -85,6 +87,7 @@ const buildAgentResponse = ({
       llmModel: llmModel ?? undefined,
       fallbackUsed,
       latencyMs,
+      errorMessage,
     },
     debug: debugEnabled
       ? {
@@ -361,6 +364,7 @@ export async function POST(request: Request) {
           requestId,
           llmModel,
           fallbackUsed: agentResult.fallbackUsed,
+          errorMessage: agentResult.errorMessage,
           latencyMs: Date.now() - agentStart,
           debugEnabled,
           toolDebug: agentResult.toolDebug,
