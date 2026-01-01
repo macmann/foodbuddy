@@ -3,6 +3,9 @@ export type RecommendationCardData = {
   name: string;
   rating?: number;
   reviewCount?: number;
+  priceLevel?: number;
+  lat?: number;
+  lng?: number;
   distanceMeters?: number;
   openNow?: boolean;
   address?: string;
