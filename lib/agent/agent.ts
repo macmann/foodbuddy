@@ -65,9 +65,11 @@ const isRecommendationCardData = (value: unknown): value is RecommendationCardDa
 export const runFoodBuddyAgent = async ({
   userMessage,
   context,
+  signal,
 }: {
   userMessage: string;
   context: AgentContext;
+  signal?: AbortSignal;
 }): Promise<AgentResult> => {
   const settings = await getLLMSettings();
   if (settings.isFallback) {
@@ -142,6 +144,7 @@ export const runFoodBuddyAgent = async ({
         tools: toolSchemas,
         settings,
         requestId: context.requestId,
+        signal,
       });
     } catch (err) {
       logger.error({ err, requestId: context.requestId }, "LLM call failed");
