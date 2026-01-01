@@ -87,6 +87,11 @@ Then open `http://localhost:3000`.
 3. **Share a location** to receive nearby recommendations.
 4. **Browse results** and iterate on preferences (price, distance, cuisine).
 
+## Client integration notes
+
+- `/api/chat` expects a stable `sessionId` per conversation to support pagination like "show more."
+- If the client omits `sessionId`, the server generates one and returns it in the response; store and reuse it for follow-up requests.
+
 ## Scripts
 
 - `npm run dev` — start the dev server

@@ -51,6 +51,7 @@ export type ChatResponse = {
   primary: RecommendationCardData | null;
   alternatives: RecommendationCardData[];
   places: RecommendationCardData[];
+  sessionId: string;
   meta: AgentMeta;
   debug?: ChatResponseDebug;
   successfull?: boolean;

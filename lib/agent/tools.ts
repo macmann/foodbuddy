@@ -116,6 +116,9 @@ const resolvePaginationOverride = (
   context: AgentToolContext,
   fallback: { keyword: string; radiusMeters: number },
 ): { keyword: string; radiusMeters: number; nextPageToken?: string } | null => {
+  if (!context.sessionId) {
+    return null;
+  }
   if (!isPaginationMessage(context.rawMessage)) {
     return null;
   }
