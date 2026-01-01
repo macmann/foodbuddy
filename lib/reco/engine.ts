@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 
 import { prisma } from "../db";
 import { logger } from "../logger";
-import { getPlacesProvider } from "../places";
+import { resolvePlacesProvider } from "../places";
 import type { PlaceCandidate, PlaceDetails } from "../places";
 import {
   communityBoost,
@@ -43,6 +43,7 @@ type ParsedQuery = {
   openNow: boolean;
   budget?: "cheap" | "mid" | "expensive";
   llm?: unknown | null;
+  locationText?: string;
 };
 
 const toJsonSafe = <T,>(value: T): unknown => {
@@ -59,6 +60,13 @@ const toJsonSafe = <T,>(value: T): unknown => {
 const DEFAULT_RADIUS_METERS = 1500;
 const EXPANDED_RADIUS_METERS = 3000;
 const MAX_DETAILS = 5;
+const MIN_RADIUS_METERS = 500;
+const MAX_RADIUS_METERS = 10_000;
+
+const clampRadiusMeters = (radius?: number, fallback = DEFAULT_RADIUS_METERS) => {
+  const candidate = typeof radius === "number" && Number.isFinite(radius) ? radius : fallback;
+  return Math.min(MAX_RADIUS_METERS, Math.max(MIN_RADIUS_METERS, Math.round(candidate)));
+};
 
 type RecommendationMetadata = {
   status: RecommendationStatus;
@@ -89,9 +97,22 @@ type RecommendationEventInput = {
 export const recommend = async (
   input: RecommendationInput,
 ): Promise<RecommendationResponse> => {
-  const provider = getPlacesProvider();
+  const selection = resolvePlacesProvider();
+  if (!selection.provider) {
+    return {
+      primary: null,
+      alternatives: [],
+      debug: {
+        tool: {
+          provider: selection.providerName,
+          error_message: selection.reason ?? "Places provider unavailable.",
+        },
+      },
+    };
+  }
+  const provider = selection.provider;
   const parsed = parseQuery(input.queryText);
-  const baseRadius = input.radiusMetersOverride ?? parsed.radiusMeters;
+  const baseRadius = clampRadiusMeters(input.radiusMetersOverride ?? parsed.radiusMeters);
   const radii = Array.from(new Set([baseRadius, 2500, 5000])).filter(
     (radius) => radius > 0,
   );
@@ -286,6 +307,12 @@ const buildKeywordVariants = (rawQuery: string, parsedKeyword?: string): string[
 export const parseQuery = (queryText: string): ParsedQuery => {
   const lower = queryText.toLowerCase();
   const openNow = lower.includes("open");
+  const locationMatch = lower.match(/\bin\s+(.+)$/);
+  const locationText = locationMatch?.[1]?.trim();
+  const baseQuery =
+    locationMatch && locationMatch.index !== undefined
+      ? lower.slice(0, locationMatch.index).trim()
+      : lower;
 
   let budget: ParsedQuery["budget"];
   if (/(cheap|budget|affordable|inexpensive)/.test(lower)) {
@@ -296,8 +323,11 @@ export const parseQuery = (queryText: string): ParsedQuery => {
     budget = "mid";
   }
 
-  const keyword = lower
-    .replace(/(open|near|nearby|around|cheap|budget|affordable|inexpensive|expensive|fine dining|splurge|luxury|mid|moderate|average|normal)/g, "")
+  const keyword = baseQuery
+    .replace(
+      /(open|near|nearby|around|cheap|budget|affordable|inexpensive|expensive|fine dining|splurge|luxury|mid|moderate|average|normal)/g,
+      "",
+    )
     .trim();
 
   return {
@@ -305,6 +335,7 @@ export const parseQuery = (queryText: string): ParsedQuery => {
     radiusMeters: DEFAULT_RADIUS_METERS,
     openNow,
     budget,
+    locationText: locationText && locationText.length > 0 ? locationText : undefined,
   };
 };
 

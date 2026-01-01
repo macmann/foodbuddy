@@ -52,7 +52,7 @@ type GooglePlaceResult = {
 export class GoogleApiProvider implements PlacesProvider {
   constructor(private readonly apiKey: string) {}
 
-  async geocode(text: string): Promise<Coordinates | null> {
+  async geocode(text: string, requestId?: string): Promise<Coordinates | null> {
     try {
       const url = new URL(GEOCODE_URL);
       url.searchParams.set("address", text);
@@ -65,7 +65,7 @@ export class GoogleApiProvider implements PlacesProvider {
 
       if (data.status !== "OK" || !data.results?.length) {
         logger.error(
-          { status: data.status, err: data.error_message },
+          { requestId, status: data.status, err: data.error_message },
           "Google geocode request failed",
         );
         return null;
@@ -78,7 +78,7 @@ export class GoogleApiProvider implements PlacesProvider {
 
       return { lat: location.lat, lng: location.lng };
     } catch (err) {
-      logger.error({ err }, "Google geocode request threw an error");
+      logger.error({ err, requestId }, "Google geocode request threw an error");
       return null;
     }
   }
