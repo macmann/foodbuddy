@@ -31,6 +31,64 @@ type ChatRequestBody = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
+type Attempt = {
+  radius: number;
+  endpoint: string;
+  resultsCount: number;
+  keyword?: string;
+  googleStatus?: string;
+};
+
+const coerceNumber = (value: unknown): number | undefined => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      return undefined;
+    }
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+};
+
+const coerceString = (value: unknown): string | undefined => {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
+const sanitizeAttempts = (raw: unknown): Attempt[] | undefined => {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const attempts = raw
+    .filter(isRecord)
+    .map((attempt) => {
+      const radius = coerceNumber(attempt.radius);
+      const resultsCount = coerceNumber(attempt.resultsCount);
+      const endpoint = coerceString(attempt.endpoint);
+      if (!endpoint || radius === undefined || resultsCount === undefined) {
+        return undefined;
+      }
+      const keyword = coerceString(attempt.keyword);
+      const googleStatus = coerceString(attempt.googleStatus);
+      return {
+        radius,
+        endpoint,
+        resultsCount,
+        keyword,
+        googleStatus,
+      };
+    })
+    .filter((attempt): attempt is Attempt => Boolean(attempt));
+  return attempts.length > 0 ? attempts : undefined;
+};
+
 const parseChatRequestBody = (payload: unknown): ChatRequestBody | null => {
   if (!isRecord(payload)) {
     return null;
@@ -91,30 +149,13 @@ const buildToolDebug = (
   if (!isRecord(tool)) {
     return undefined;
   }
-  const attempts = Array.isArray(tool.attempts)
-    ? tool.attempts
-        .filter(isRecord)
-        .filter(
-          (attempt) =>
-            typeof attempt.radius === "number" &&
-            typeof attempt.endpoint === "string" &&
-            typeof attempt.resultsCount === "number",
-        )
-        .map((attempt) => ({
-          radius: attempt.radius,
-          endpoint: attempt.endpoint,
-          resultsCount: attempt.resultsCount,
-          keyword: typeof attempt.keyword === "string" ? attempt.keyword : undefined,
-          googleStatus:
-            typeof attempt.googleStatus === "string" ? attempt.googleStatus : undefined,
-        }))
-    : undefined;
+  const attempts = sanitizeAttempts(tool.attempts);
   return {
     endpointUsed: typeof tool.endpointUsed === "string" ? tool.endpointUsed : undefined,
     provider: typeof tool.provider === "string" ? tool.provider : undefined,
     googleStatus: typeof tool.googleStatus === "string" ? tool.googleStatus : undefined,
     error_message: typeof tool.error_message === "string" ? tool.error_message : undefined,
-    attempts: attempts && attempts.length > 0 ? attempts : undefined,
+    attempts,
   };
 };
 
