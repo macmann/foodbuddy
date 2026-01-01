@@ -1,4 +1,6 @@
 import { logger } from "../logger";
+import { listMcpTools, mcpCall } from "../mcp/client";
+import type { ToolDefinition } from "../mcp/types";
 import { getPlacesProvider } from "../places";
 import type { Coordinates, PlaceCandidate } from "../places";
 import { haversineMeters } from "../reco/scoring";
@@ -75,6 +77,35 @@ const pickFirstString = (...values: Array<unknown | undefined>): string | undefi
     }
   }
   return undefined;
+};
+
+const getSchemaProperties = (schema?: Record<string, unknown>): string[] => {
+  if (!schema) {
+    return [];
+  }
+  const properties = (schema as { properties?: Record<string, unknown> }).properties;
+  if (!properties || typeof properties !== "object") {
+    return [];
+  }
+  return Object.keys(properties);
+};
+
+const matchSchemaKey = (schema: Record<string, unknown> | undefined, candidates: string[]) => {
+  const keys = getSchemaProperties(schema);
+  const lowerKeys = keys.map((key) => key.toLowerCase());
+  for (const candidate of candidates) {
+    const candidateLower = candidate.toLowerCase();
+    const index = lowerKeys.findIndex((key) => key.includes(candidateLower));
+    if (index >= 0) {
+      return keys[index];
+    }
+  }
+  return undefined;
+};
+
+const hasSchemaProperty = (schema: Record<string, unknown> | undefined, name: string) => {
+  const keys = getSchemaProperties(schema);
+  return keys.some((key) => key.toLowerCase() === name.toLowerCase());
 };
 
 const toNumber = (value: unknown): number | undefined => {
@@ -199,52 +230,12 @@ const normalizeMcpPlace = (
   };
 };
 
-const buildGenericRecommendations = (
-  origin: Coordinates,
-  keyword?: string,
-): RecommendationCardData[] => {
-  const queryLabel = keyword?.trim() ? ` for ${keyword.trim()}` : "";
-  const templates = [
-    {
-      placeId: "generic-local-favorite",
-      name: "Local Favorite",
-      rationale: `A popular neighborhood pick${queryLabel}.`,
-    },
-    {
-      placeId: "generic-hidden-gem",
-      name: "Hidden Gem",
-      rationale: `A well-loved spot${queryLabel} with solid reviews.`,
-    },
-    {
-      placeId: "generic-family-friendly",
-      name: "Family Friendly",
-      rationale: `A reliable option${queryLabel} for groups and quick bites.`,
-    },
-  ];
-
-  return templates.map((template) => ({
-    placeId: template.placeId,
-    name: template.name,
-    rationale: template.rationale,
-    lat: origin.lat,
-    lng: origin.lng,
-    distanceMeters: 0,
-    mapsUrl: buildMapsUrl(template.name, origin.lat, origin.lng),
-    address: "Nearby",
-  }));
-};
-
-const buildMcpFallbackResult = ({
-  location,
-  keyword,
-  errorMessage,
-}: {
-  location: Coordinates;
-  keyword?: string;
-  errorMessage: string;
-}): Record<string, unknown> => {
+const buildMcpFallbackResult = ({ errorMessage }: { errorMessage: string }): Record<
+  string,
+  unknown
+> => {
   return {
-    results: buildGenericRecommendations(location, keyword),
+    results: [],
     meta: {
       fallbackUsed: true,
       errorMessage,
@@ -252,10 +243,68 @@ const buildMcpFallbackResult = ({
     debug: {
       error: "mcp_failed",
       tool: {
+        provider: "MCP",
         error_message: errorMessage,
       },
     },
   };
+};
+
+const resolveNearbySearchTool = (tools: ToolDefinition[]): ToolDefinition | null => {
+  const findTool = (requirements: string[]) => {
+    const found = tools.find((tool) => {
+      const name = tool.name.toLowerCase();
+      return requirements.every((part) => name.includes(part));
+    });
+    return found ?? null;
+  };
+
+  return (
+    findTool(["nearby", "search"]) ??
+    findTool(["places", "nearby"]) ??
+    findTool(["maps", "places", "search"]) ??
+    findTool(["maps", "search"]) ??
+    null
+  );
+};
+
+const buildNearbySearchArgs = (
+  tool: ToolDefinition,
+  params: {
+    lat: number;
+    lng: number;
+    radiusMeters: number;
+    keyword?: string;
+  },
+): Record<string, unknown> => {
+  const schema = tool.inputSchema;
+  const args: Record<string, unknown> = {};
+
+  const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
+  const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
+  const radiusKey = matchSchemaKey(schema, ["radius", "radius_m", "distance"]);
+  const keywordKey = matchSchemaKey(schema, ["keyword", "query", "text", "search"]);
+
+  if (hasSchemaProperty(schema, "location") && (!latKey || !lngKey)) {
+    args.location = { lat: params.lat, lng: params.lng };
+  } else {
+    if (latKey) {
+      args[latKey] = params.lat;
+    }
+    if (lngKey) {
+      args[lngKey] = params.lng;
+    }
+  }
+
+  if (radiusKey) {
+    args[radiusKey] = params.radiusMeters;
+  }
+
+  if (keywordKey && params.keyword) {
+    args[keywordKey] = params.keyword;
+  }
+
+  return args;
 };
 
 const nearbySearch = async (
@@ -373,8 +422,6 @@ const recommendInternal = async (
 
     if (isMcpProvider && (!hasComposioKey || !hasComposioUrl)) {
       return buildMcpFallbackResult({
-        location: location ?? { lat: 0, lng: 0 },
-        keyword: parsed.keyword ?? args.query,
         errorMessage: "Missing COMPOSIO_MCP_URL or COMPOSIO_API_KEY for MCP provider.",
       });
     }
@@ -388,59 +435,38 @@ const recommendInternal = async (
 
     if (isMcpProvider) {
       const keyword = parsed.keyword ?? args.query;
-      const headers = {
-        Accept: "application/json, text/event-stream",
-        "Content-Type": "application/json",
-        "Cache-Control": "no-cache",
-        "x-api-key": composioApiKey!,
-      };
-      const response = await fetch(mcpUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          tool: "google_maps_places_search",
-          arguments: {
-            query: keyword,
-            latitude: location.lat,
-            longitude: location.lng,
-            radius_m: initialRadiusMeters,
-          },
-        }),
-      });
-
-      if (!response.ok) {
-        const responseText = await response.text();
-        const errorMessage = `MCP request failed with status ${response.status}: ${responseText}`;
-        logger.warn(
-          {
-            requestId: context.requestId,
-            status: response.status,
-            responseText,
-            headers: {
-              ...headers,
-              "x-api-key": "[redacted]",
-            },
-          },
-          "Composio MCP recommend_places failed",
-        );
-        return buildMcpFallbackResult({ location, keyword, errorMessage });
-      }
-
-      let payload: unknown = null;
       try {
-        payload = await response.json();
+        const tools = await listMcpTools({ url: mcpUrl, apiKey: composioApiKey! });
+        const tool = resolveNearbySearchTool(tools);
+        if (!tool) {
+          throw new Error("Unable to resolve MCP nearby search tool.");
+        }
+
+        const toolArgs = buildNearbySearchArgs(tool, {
+          lat: location.lat,
+          lng: location.lng,
+          radiusMeters: initialRadiusMeters,
+          keyword,
+        });
+
+        const payload = await mcpCall<unknown>({
+          url: mcpUrl,
+          apiKey: composioApiKey!,
+          method: "tools/call",
+          params: { name: tool.name, arguments: toolArgs },
+        });
+
+        const places = extractPlacesArray(payload);
+        const normalized = places
+          .map((place) => normalizeMcpPlace(place, location!))
+          .filter(Boolean) as RecommendationCardData[];
+
+        return { results: normalized };
       } catch (err) {
-        const errorMessage = "Failed to parse MCP response JSON.";
-        logger.warn({ err, requestId: context.requestId }, "Composio MCP response parse failed");
-        return buildMcpFallbackResult({ location, keyword, errorMessage });
+        const errorMessage = err instanceof Error ? err.message : "Unknown MCP error.";
+        logger.warn({ err, requestId: context.requestId }, "Composio MCP recommend_places failed");
+        return buildMcpFallbackResult({ errorMessage });
       }
-
-      const places = extractPlacesArray(payload);
-      const normalized = places
-        .map((place) => normalizeMcpPlace(place, location!))
-        .filter(Boolean) as RecommendationCardData[];
-
-      return { results: normalized };
     }
 
     if (!envHasGoogleKey) {
@@ -489,10 +515,7 @@ const recommendInternal = async (
       err instanceof Error ? err.message : "Unknown error during recommend_places.";
     logger.error({ err, requestId: context.requestId }, "recommend_places failed");
     if (process.env.GOOGLE_PROVIDER === "MCP") {
-      const safeLocation = { lat: 0, lng: 0 };
       return buildMcpFallbackResult({
-        location: context.location ?? safeLocation,
-        keyword: (args as RecommendInternalArgs).query,
         errorMessage,
       });
     }

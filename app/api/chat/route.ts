@@ -88,6 +88,13 @@ const buildAgentResponse = ({
       fallbackUsed,
       latencyMs,
       errorMessage,
+      debug:
+        errorMessage || (toolDebug as { tool?: { provider?: string } })?.tool?.provider
+          ? {
+              provider: (toolDebug as { tool?: { provider?: string } })?.tool?.provider,
+              error: errorMessage,
+            }
+          : undefined,
     },
     debug: debugEnabled
       ? {

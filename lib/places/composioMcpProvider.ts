@@ -2,8 +2,8 @@ import "server-only";
 
 import { getConfig } from "../config";
 import { logger } from "../logger";
-import { mcpCall } from "../mcp/client";
-import type { ListToolsResult, ToolDefinition } from "../mcp/types";
+import { listMcpTools, mcpCall } from "../mcp/client";
+import type { ToolDefinition } from "../mcp/types";
 import type { PlacesProvider } from "./provider";
 import type {
   Coordinates,
@@ -25,7 +25,7 @@ type Cached<T> = {
   value: T;
 };
 
-const TOOLS_TTL_MS = 5 * 60 * 1000;
+const TOOLS_TTL_MS = 10 * 60 * 1000;
 const RETRY_DELAY_MS = 400;
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
 const buildRequestId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -207,7 +207,11 @@ export class ComposioMcpProvider implements PlacesProvider {
   constructor(
     private readonly url = getConfig().COMPOSIO_MCP_URL!,
     private readonly apiKey = getConfig().COMPOSIO_API_KEY!,
-  ) {}
+  ) {
+    void this.listTools().catch((err) => {
+      logger.debug({ err }, "Composio MCP tool listing warmup failed");
+    });
+  }
 
   async geocode(text: string): Promise<Coordinates | null> {
     const requestId = buildRequestId();
@@ -295,7 +299,11 @@ export class ComposioMcpProvider implements PlacesProvider {
       findTool(["geocode"]) ??
       tools.find((tool) => tool.name.toLowerCase().includes("geo")) ??
       null;
-    const nearbySearch = findTool(["nearby", "search"]) ?? findTool(["maps", "search"]);
+    const nearbySearch =
+      findTool(["nearby", "search"]) ??
+      findTool(["places", "nearby"]) ??
+      findTool(["maps", "places", "search"]) ??
+      findTool(["maps", "search"]);
     const placeDetails =
       findTool(["place", "details"]) ??
       findTool(["details", "place"]) ??
@@ -320,23 +328,18 @@ export class ComposioMcpProvider implements PlacesProvider {
       return toolsCache.value;
     }
 
-    let result: ListToolsResult | null = null;
+    let tools: ToolDefinition[] = [];
     try {
-      result = await mcpCall<ListToolsResult>({
-        url: this.url,
-        apiKey: this.apiKey,
-        method: "tools/list",
-        params: {},
-      });
+      tools = await listMcpTools({ url: this.url, apiKey: this.apiKey });
     } catch (err) {
       logger.error({ err }, "Composio MCP tool listing failed");
     }
 
-    const tools = Array.isArray(result?.tools) ? result.tools : [];
     toolsCache = { value: tools, expiresAt: now + TOOLS_TTL_MS };
-    if (process.env.NODE_ENV === "development") {
-      logger.info({ toolCount: tools.length }, "Composio MCP tools listed");
-    }
+    logger.debug(
+      { toolCount: tools.length, toolNames: tools.map((tool) => tool.name) },
+      "Composio MCP tools listed",
+    );
     return tools;
   }
 
