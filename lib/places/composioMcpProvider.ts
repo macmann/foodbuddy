@@ -1,7 +1,10 @@
 import "server-only";
 
 import { logger } from "../logger";
-import { listMcpTools, mcpCall } from "../mcp/client";
+import { invalidateMcpToolsCache, listMcpTools, mcpCall } from "../mcp/client";
+import { extractPlacesFromMcpResult } from "../mcp/placesExtractor";
+import { resolveMcpPayloadFromResult } from "../mcp/resultParser";
+import { resolveMcpTools } from "../mcp/toolResolver";
 import type { ToolDefinition } from "../mcp/types";
 import type { PlacesProvider } from "./provider";
 import type {
@@ -17,6 +20,7 @@ type ToolResolution = {
   geocode: ToolDefinition;
   nearbySearch: ToolDefinition;
   placeDetails: ToolDefinition;
+  textSearch?: ToolDefinition;
 };
 
 type Cached<T> = {
@@ -24,7 +28,7 @@ type Cached<T> = {
   value: T;
 };
 
-const TOOLS_TTL_MS = 10 * 60 * 1000;
+const TOOLS_TTL_MS = 5 * 60 * 1000;
 const RETRY_DELAY_MS = 400;
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
 const buildRequestId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -177,33 +181,6 @@ const normalizePlace = (payload: Record<string, unknown>): PlaceCandidate | null
   };
 };
 
-const extractPlacesArray = (payload: unknown): Record<string, unknown>[] => {
-  if (!payload) {
-    return [];
-  }
-  if (Array.isArray(payload)) {
-    return payload.filter((item) => item && typeof item === "object") as Record<
-      string,
-      unknown
-    >[];
-  }
-  if (typeof payload === "object") {
-    const record = payload as Record<string, unknown>;
-    const listCandidates =
-      record.results ?? record.places ?? record.candidates ?? record.items ?? record.data;
-    if (Array.isArray(listCandidates)) {
-      return listCandidates.filter((item) => item && typeof item === "object") as Record<
-        string,
-        unknown
-      >[];
-    }
-    if (record.result && typeof record.result === "object") {
-      return extractPlacesArray(record.result);
-    }
-  }
-  return [];
-};
-
 export class ComposioMcpProvider implements PlacesProvider {
   constructor(
     private readonly url: string,
@@ -220,7 +197,8 @@ export class ComposioMcpProvider implements PlacesProvider {
       const tools = await this.resolveTools();
       const args = this.buildGeocodeArgs(tools.geocode, text);
       const result = await this.callTool(tools.geocode.name, args, resolvedRequestId);
-      const location = extractLatLng(result ?? {});
+      const { payload } = resolveMcpPayloadFromResult(result);
+      const location = extractLatLng((payload ?? {}) as Record<string, unknown>);
       if (location.lat === undefined || location.lng === undefined) {
         return null;
       }
@@ -242,9 +220,21 @@ export class ComposioMcpProvider implements PlacesProvider {
     const requestId = params.requestId ?? buildRequestId();
     try {
       const tools = await this.resolveTools();
-      const args = this.buildNearbySearchArgs(tools.nearbySearch, params);
-      const result = await this.callTool(tools.nearbySearch.name, args, requestId);
-      const places = extractPlacesArray(result).map(normalizePlace).filter(Boolean) as PlaceCandidate[];
+      const tool = tools.nearbySearch ?? tools.textSearch;
+      if (!tool) {
+        throw new Error("No MCP nearby/text search tool resolved.");
+      }
+      const args =
+        tool.name === tools.nearbySearch?.name
+          ? this.buildNearbySearchArgs(tool, params)
+          : this.buildTextSearchArgs(tool, {
+              query: params.keyword ?? "restaurants",
+              locationText: undefined,
+              location: { lat: params.lat, lng: params.lng },
+            });
+      const result = await this.callTool(tool.name, args, requestId);
+      const { places: rawPlaces } = extractPlacesFromMcpResult(result);
+      const places = rawPlaces.map(normalizePlace).filter(Boolean) as PlaceCandidate[];
       return { results: places.slice(0, 20) };
     } catch (err) {
       logger.error({ err, requestId }, "Composio MCP nearby search failed");
@@ -253,13 +243,35 @@ export class ComposioMcpProvider implements PlacesProvider {
   }
 
   async textSearch(params: TextSearchParams): Promise<NearbySearchResponse> {
-    return this.nearbySearch({
-      lat: params.lat,
-      lng: params.lng,
-      radiusMeters: 5000,
-      keyword: params.query,
-      requestId: params.requestId,
-    });
+    const requestId = params.requestId ?? buildRequestId();
+    try {
+      const tools = await this.resolveTools();
+      const tool = tools.textSearch ?? tools.nearbySearch;
+      if (!tool) {
+        throw new Error("No MCP text/nearby search tool resolved.");
+      }
+      const args =
+        tool.name === tools.textSearch?.name
+          ? this.buildTextSearchArgs(tool, {
+              query: params.query,
+              locationText: undefined,
+              location: { lat: params.lat, lng: params.lng },
+            })
+          : this.buildNearbySearchArgs(tool, {
+              lat: params.lat,
+              lng: params.lng,
+              radiusMeters: 5000,
+              keyword: params.query,
+              openNow: undefined,
+            });
+      const result = await this.callTool(tool.name, args, requestId);
+      const { places: rawPlaces } = extractPlacesFromMcpResult(result);
+      const places = rawPlaces.map(normalizePlace).filter(Boolean) as PlaceCandidate[];
+      return { results: places.slice(0, 20) };
+    } catch (err) {
+      logger.error({ err, requestId }, "Composio MCP text search failed");
+      return { results: [] };
+    }
   }
 
   async placeDetails(placeId: string): Promise<PlaceDetails | null> {
@@ -268,9 +280,7 @@ export class ComposioMcpProvider implements PlacesProvider {
       const tools = await this.resolveTools();
       const args = this.buildPlaceDetailsArgs(tools.placeDetails, placeId);
       const result = await this.callTool(tools.placeDetails.name, args, requestId);
-      const payload =
-        (result as Record<string, unknown> | undefined) ??
-        ((result as { result?: Record<string, unknown> })?.result ?? result);
+      const { payload } = resolveMcpPayloadFromResult(result);
       if (!payload || typeof payload !== "object") {
         return null;
       }
@@ -289,28 +299,10 @@ export class ComposioMcpProvider implements PlacesProvider {
     }
 
     const tools = await this.listTools();
-    const findTool = (requirements: string[]) => {
-      const found = tools.find((tool) => {
-        const name = tool.name.toLowerCase();
-        return requirements.every((part) => name.includes(part));
-      });
-      return found ?? null;
-    };
-
-    const geocode =
-      findTool(["geocode"]) ??
-      tools.find((tool) => tool.name.toLowerCase().includes("geo")) ??
-      null;
-    const nearbySearch =
-      findTool(["nearby", "search"]) ??
-      findTool(["places", "nearby"]) ??
-      findTool(["maps", "places", "search"]) ??
-      findTool(["maps", "search"]);
-    const placeDetails =
-      findTool(["place", "details"]) ??
-      findTool(["details", "place"]) ??
-      tools.find((tool) => tool.name.toLowerCase().includes("details")) ??
-      null;
+    const resolved = resolveMcpTools(tools);
+    const geocode = resolved.geocode ?? null;
+    const nearbySearch = resolved.nearbySearch ?? resolved.textSearch ?? null;
+    const placeDetails = resolved.placeDetails ?? null;
 
     if (!geocode || !nearbySearch || !placeDetails) {
       const availableNames = tools.map((tool) => tool.name).join(", ");
@@ -319,7 +311,12 @@ export class ComposioMcpProvider implements PlacesProvider {
       );
     }
 
-    const resolution = { geocode, nearbySearch, placeDetails };
+    const resolution = {
+      geocode,
+      nearbySearch,
+      placeDetails,
+      textSearch: resolved.textSearch,
+    };
     toolResolutionCache = { value: resolution, expiresAt: now + TOOLS_TTL_MS };
     return resolution;
   }
@@ -396,6 +393,47 @@ export class ComposioMcpProvider implements PlacesProvider {
     return args;
   }
 
+  private buildTextSearchArgs(
+    tool: ToolDefinition,
+    params: {
+      query: string;
+      locationText?: string;
+      location?: { lat: number; lng: number };
+    },
+  ): Record<string, unknown> {
+    const schema = tool.inputSchema;
+    const args: Record<string, unknown> = {};
+    const queryKey = matchSchemaKey(schema, ["query", "text", "input", "search"]);
+    const locationKey = matchSchemaKey(schema, ["location", "near", "bias"]);
+    const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
+    const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
+
+    const queryValue = params.locationText
+      ? `${params.query} in ${params.locationText}`
+      : params.query;
+
+    if (queryKey) {
+      args[queryKey] = queryValue;
+    } else {
+      args.query = queryValue;
+    }
+
+    if (params.location && (latKey || lngKey)) {
+      if (latKey) {
+        args[latKey] = params.location.lat;
+      }
+      if (lngKey) {
+        args[lngKey] = params.location.lng;
+      }
+    } else if (params.location && hasSchemaProperty(schema, "location")) {
+      args.location = { lat: params.location.lat, lng: params.location.lng };
+    } else if (locationKey && params.locationText) {
+      args[locationKey] = params.locationText;
+    }
+
+    return args;
+  }
+
   private buildPlaceDetailsArgs(tool: ToolDefinition, placeId: string): Record<string, unknown> {
     const schema = tool.inputSchema;
     const idKey = matchSchemaKey(schema, ["place_id", "placeid", "place", "id"]) ?? "placeId";
@@ -419,6 +457,12 @@ export class ComposioMcpProvider implements PlacesProvider {
     try {
       return await call();
     } catch (err) {
+      const message = err instanceof Error ? err.message.toLowerCase() : "";
+      if (message.includes("unknown tool") || message.includes("tool not found")) {
+        invalidateMcpToolsCache({ url: this.url, apiKey: this.apiKey });
+        toolsCache = null;
+        toolResolutionCache = null;
+      }
       const status = (err as Error & { status?: number }).status;
       const isRetryable =
         status !== undefined && RETRYABLE_STATUS.has(status)

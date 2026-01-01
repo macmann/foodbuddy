@@ -1,5 +1,8 @@
 import { logger } from "../logger";
-import { listMcpTools, mcpCall } from "../mcp/client";
+import { invalidateMcpToolsCache, listMcpTools, mcpCall } from "../mcp/client";
+import { extractPlacesFromMcpResult } from "../mcp/placesExtractor";
+import { resolveMcpPayloadFromResult } from "../mcp/resultParser";
+import { resolveMcpTools, selectSearchTool } from "../mcp/toolResolver";
 import type { ToolDefinition } from "../mcp/types";
 import { resolvePlacesProvider } from "../places";
 import type { Coordinates, PlaceCandidate } from "../places";
@@ -151,36 +154,9 @@ const buildMapsUrl = (placeId?: string): string | undefined => {
   return `https://www.google.com/maps/place/?q=place_id:${encodeURIComponent(placeId)}`;
 };
 
-const extractPlacesArray = (payload: unknown): Record<string, unknown>[] => {
-  if (!payload) {
-    return [];
-  }
-  if (Array.isArray(payload)) {
-    return payload.filter((item) => item && typeof item === "object") as Record<
-      string,
-      unknown
-    >[];
-  }
-  if (typeof payload === "object") {
-    const record = payload as Record<string, unknown>;
-    const listCandidates =
-      record.results ?? record.places ?? record.candidates ?? record.items ?? record.data;
-    if (Array.isArray(listCandidates)) {
-      return listCandidates.filter((item) => item && typeof item === "object") as Record<
-        string,
-        unknown
-      >[];
-    }
-    if (record.result && typeof record.result === "object") {
-      return extractPlacesArray(record.result);
-    }
-  }
-  return [];
-};
-
 const normalizeMcpPlace = (
   payload: Record<string, unknown>,
-  origin: Coordinates,
+  origin?: Coordinates | null,
 ): RecommendationCardData | null => {
   const name = pickFirstString(
     payload.name,
@@ -220,7 +196,9 @@ const normalizeMcpPlace = (
         : undefined;
 
   const distanceMeters =
-    lat !== undefined && lng !== undefined ? haversineMeters(origin, { lat, lng }) : undefined;
+    origin && lat !== undefined && lng !== undefined
+      ? haversineMeters(origin, { lat, lng })
+      : undefined;
 
   const normalizedPlaceId =
     placeId ?? `${name ?? "place"}-${lat ?? ""}-${lng ?? ""}`.replace(/\s+/g, "-");
@@ -263,24 +241,6 @@ const buildProviderFallbackResult = ({
   };
 };
 
-const resolveNearbySearchTool = (tools: ToolDefinition[]): ToolDefinition | null => {
-  const findTool = (requirements: string[]) => {
-    const found = tools.find((tool) => {
-      const name = tool.name.toLowerCase();
-      return requirements.every((part) => name.includes(part));
-    });
-    return found ?? null;
-  };
-
-  return (
-    findTool(["nearby", "search"]) ??
-    findTool(["places", "nearby"]) ??
-    findTool(["maps", "places", "search"]) ??
-    findTool(["maps", "search"]) ??
-    null
-  );
-};
-
 const buildNearbySearchArgs = (
   tool: ToolDefinition,
   params: {
@@ -318,6 +278,58 @@ const buildNearbySearchArgs = (
   }
 
   return args;
+};
+
+const buildGeocodeArgs = (tool: ToolDefinition, text: string): Record<string, unknown> => {
+  const schema = tool.inputSchema;
+  const textKey = matchSchemaKey(schema, ["text", "address", "query", "input"]) ?? "text";
+  return { [textKey]: text };
+};
+
+const buildTextSearchArgs = (
+  tool: ToolDefinition,
+  params: {
+    query: string;
+    locationText?: string;
+    location?: { lat: number; lng: number };
+  },
+): Record<string, unknown> => {
+  const schema = tool.inputSchema;
+  const args: Record<string, unknown> = {};
+  const queryKey = matchSchemaKey(schema, ["query", "text", "input", "search"]);
+  const locationKey = matchSchemaKey(schema, ["location", "near", "bias"]);
+  const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
+  const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
+
+  const queryValue = params.locationText
+    ? `${params.query} in ${params.locationText}`
+    : params.query;
+
+  if (queryKey) {
+    args[queryKey] = queryValue;
+  } else {
+    args.query = queryValue;
+  }
+
+  if (params.location && (latKey || lngKey)) {
+    if (latKey) {
+      args[latKey] = params.location.lat;
+    }
+    if (lngKey) {
+      args[lngKey] = params.location.lng;
+    }
+  } else if (params.location && hasSchemaProperty(schema, "location")) {
+    args.location = { lat: params.location.lat, lng: params.location.lng };
+  } else if (locationKey && params.locationText) {
+    args[locationKey] = params.locationText;
+  }
+
+  return args;
+};
+
+const isUnknownToolError = (err: unknown): boolean => {
+  const message = err instanceof Error ? err.message.toLowerCase() : "";
+  return message.includes("unknown tool") || message.includes("tool not found");
 };
 
 const nearbySearch = async (
@@ -445,7 +457,7 @@ const recommendInternal = async (
       });
     }
 
-    if (!location) {
+    if (!location && providerName !== "MCP") {
       return {
         results: [],
         debug: { error: "Location is required for recommendations." },
@@ -460,33 +472,139 @@ const recommendInternal = async (
           apiKey: composioApiKey,
           requestId: context.requestId,
         });
-        const tool = resolveNearbySearchTool(tools);
-        if (!tool) {
-          const available = tools.map((item) => item.name).join(", ");
-          throw new Error(
-            `Unable to resolve MCP nearby search tool. Available tools: ${available || "(none)"}`,
+        const resolvedTools = resolveMcpTools(tools);
+        const available = tools.map((item) => item.name).join(", ");
+
+        const ensureTools = () => {
+          if (!resolvedTools.nearbySearch && !resolvedTools.textSearch) {
+            throw new Error(
+              `Unable to resolve MCP search tool. Available tools: ${available || "(none)"}`,
+            );
+          }
+        };
+        ensureTools();
+
+        const refreshTools = async () => {
+          invalidateMcpToolsCache({ url: mcpUrl, apiKey: composioApiKey });
+          const refreshed = await listMcpTools({
+            url: mcpUrl,
+            apiKey: composioApiKey,
+            requestId: context.requestId,
+          });
+          const updated = resolveMcpTools(refreshed);
+          return { tools: refreshed, resolved: updated };
+        };
+
+        const callTool = async (tool: ToolDefinition, toolArgs: Record<string, unknown>) => {
+          logger.info(
+            {
+              requestId: context.requestId,
+              provider: "MCP",
+              tool: tool.name,
+              argsKeys: Object.keys(toolArgs),
+            },
+            "MCP tool call prepared",
           );
+          return mcpCall<unknown>({
+            url: mcpUrl,
+            apiKey: composioApiKey,
+            method: "tools/call",
+            params: { name: tool.name, arguments: toolArgs },
+            requestId: context.requestId,
+          });
+        };
+
+        const parsePlaces = (payload: unknown) => {
+          const { places, contentText } = extractPlacesFromMcpResult(payload);
+          if (contentText) {
+            logger.info(
+              {
+                requestId: context.requestId,
+                provider: "MCP",
+                contentSnippet: contentText.slice(0, 300),
+              },
+              "MCP content text received",
+            );
+          }
+          return places
+            .map((place) => normalizeMcpPlace(place, location))
+            .filter(Boolean) as RecommendationCardData[];
+        };
+
+        if (!location && locationText && resolvedTools.geocode) {
+          const geocodeArgs = buildGeocodeArgs(resolvedTools.geocode, locationText);
+          try {
+            const geocodePayload = await callTool(resolvedTools.geocode, geocodeArgs);
+            const { payload } = resolveMcpPayloadFromResult(geocodePayload);
+            const coords = extractLatLng((payload ?? {}) as Record<string, unknown>);
+            if (coords.lat !== undefined && coords.lng !== undefined) {
+              location = { lat: coords.lat, lng: coords.lng };
+            }
+          } catch (err) {
+            if (isUnknownToolError(err)) {
+              await refreshTools();
+            }
+          }
         }
 
-        const toolArgs = buildNearbySearchArgs(tool, {
-          lat: location.lat,
-          lng: location.lng,
-          radiusMeters: initialRadiusMeters,
-          keyword,
-        });
+        const retryRadii = Array.from(
+          new Set([initialRadiusMeters, 3000, 5000].map(clampRadiusMeters)),
+        );
 
-        const payload = await mcpCall<unknown>({
-          url: mcpUrl,
-          apiKey: composioApiKey,
-          method: "tools/call",
-          params: { name: tool.name, arguments: toolArgs },
-          requestId: context.requestId,
-        });
+        let normalized: RecommendationCardData[] = [];
+        if (location) {
+          const searchTool = selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
+          if (searchTool) {
+            for (const radiusMeters of retryRadii) {
+              const toolArgs =
+                searchTool.name === resolvedTools.textSearch?.name
+                  ? buildTextSearchArgs(searchTool, {
+                      query: keyword,
+                      locationText,
+                      location,
+                    })
+                  : buildNearbySearchArgs(searchTool, {
+                      lat: location.lat,
+                      lng: location.lng,
+                      radiusMeters,
+                      keyword,
+                    });
+              try {
+                const payload = await callTool(searchTool, toolArgs);
+                normalized = parsePlaces(payload);
+              } catch (err) {
+                if (isUnknownToolError(err)) {
+                  const refreshed = await refreshTools();
+                  resolvedTools.nearbySearch = refreshed.resolved.nearbySearch;
+                  resolvedTools.textSearch = refreshed.resolved.textSearch;
+                } else {
+                  throw err;
+                }
+              }
+              if (normalized.length > 0) {
+                break;
+              }
+            }
+          }
+        }
 
-        const places = extractPlacesArray(payload);
-        const normalized = places
-          .map((place) => normalizeMcpPlace(place, location!))
-          .filter(Boolean) as RecommendationCardData[];
+        if (normalized.length === 0 && resolvedTools.textSearch) {
+          const textSearchArgs = buildTextSearchArgs(resolvedTools.textSearch, {
+            query: keyword,
+            locationText,
+            location: location ?? undefined,
+          });
+          try {
+            const payload = await callTool(resolvedTools.textSearch, textSearchArgs);
+            normalized = parsePlaces(payload);
+          } catch (err) {
+            if (isUnknownToolError(err)) {
+              await refreshTools();
+            } else {
+              throw err;
+            }
+          }
+        }
 
         logger.info(
           {

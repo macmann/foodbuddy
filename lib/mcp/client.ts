@@ -1,5 +1,6 @@
 import { logger } from "../logger";
 import { extractJsonFromSse, isLikelySse } from "./sseParser";
+import { extractMcpContentSnippet } from "./resultParser";
 import type { JsonRpcResponse, ListToolsResult, ToolDefinition } from "./types";
 
 type McpCallOptions = {
@@ -11,7 +12,7 @@ type McpCallOptions = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
-const TOOLS_TTL_MS = 10 * 60 * 1000;
+const TOOLS_TTL_MS = 5 * 60 * 1000;
 
 const buildRequestId = () =>
   typeof crypto.randomUUID === "function"
@@ -160,6 +161,7 @@ export const mcpCall = async <T>({
       data = JSON.parse(responseText) as JsonRpcResponse<T>;
     }
   } catch (err) {
+    const dataSnippet = (err as Error & { dataSnippet?: string }).dataSnippet;
     logger.error(
       {
         err,
@@ -167,6 +169,7 @@ export const mcpCall = async <T>({
         requestId,
         contentType,
         snippet: responseText.slice(0, 200),
+        dataSnippet,
       },
       "MCP response parse failed",
     );
@@ -196,7 +199,16 @@ export const mcpCall = async <T>({
     throw new Error("MCP response missing result");
   }
 
-  logger.debug({ method, requestId, rpcRequestId }, "MCP request completed");
+  const responseKeys = Object.keys(data as Record<string, unknown>);
+  const resultKeys =
+    data && typeof data.result === "object" && data.result !== null
+      ? Object.keys(data.result as Record<string, unknown>)
+      : [];
+  const contentSnippet = extractMcpContentSnippet(data.result);
+  logger.debug(
+    { method, requestId, rpcRequestId, responseKeys, resultKeys, contentSnippet },
+    "MCP request completed",
+  );
   return data.result as T;
 };
 
@@ -242,6 +254,19 @@ export const listMcpTools = async ({
   logger.debug({ toolCount: toolNames.length, toolNames }, "MCP tools listed");
 
   return resolvedResult.tools;
+};
+
+export const invalidateMcpToolsCache = ({ url, apiKey }: { url?: string; apiKey?: string }) => {
+  if (!toolsCache) {
+    return;
+  }
+  if (url && toolsCache.url !== url) {
+    return;
+  }
+  if (apiKey && toolsCache.apiKey !== apiKey) {
+    return;
+  }
+  toolsCache = null;
 };
 
 const readEventStream = async (response: Response): Promise<string> => {

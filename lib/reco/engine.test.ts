@@ -3,9 +3,8 @@ import test from "node:test";
 
 import { parseQuery } from "./engine";
 
-test("parseQuery extracts location text from 'in' clause", () => {
-  const parsed = parseQuery("noodle in thaketa");
-
+test("parseQuery keeps keyword and location text", () => {
+  const parsed = parseQuery("noodle in Thanlyin");
   assert.equal(parsed.keyword, "noodle");
-  assert.equal(parsed.locationText, "thaketa");
+  assert.equal(parsed.locationText, "Thanlyin");
 });
