@@ -76,6 +76,20 @@ const pickFirstString = (...values: Array<unknown | undefined>) => {
   return undefined;
 };
 
+const normalizeStringArray = (value: unknown): string[] | undefined => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? [trimmed] : undefined;
+  }
+  if (Array.isArray(value)) {
+    const normalized = value.filter(
+      (item): item is string => typeof item === "string" && item.trim().length > 0,
+    );
+    return normalized.length > 0 ? normalized : undefined;
+  }
+  return undefined;
+};
+
 const toNumber = (value: unknown): number | undefined => {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -360,7 +374,17 @@ export class ComposioMcpProvider implements PlacesProvider {
     const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
     const radiusKey = matchSchemaKey(schema, ["radius", "radius_m", "distance"]);
     const keywordKey = matchSchemaKey(schema, ["keyword", "query", "text", "search"]);
-    const typeKey = matchSchemaKey(schema, ["type", "types", "included"]);
+    const includedTypesKey = matchSchemaKey(schema, [
+      "includedtypes",
+      "included_types",
+      "included",
+    ]);
+    const excludedTypesKey = matchSchemaKey(schema, [
+      "excludedtypes",
+      "excluded_types",
+      "excluded",
+    ]);
+    const typeKey = matchSchemaKey(schema, ["type", "types"]);
     const openNowKey = matchSchemaKey(schema, ["open_now", "open", "isopen"]);
 
     if (hasSchemaProperty(schema, "location") && (!latKey || !lngKey)) {
@@ -382,8 +406,21 @@ export class ComposioMcpProvider implements PlacesProvider {
       args[keywordKey] = params.keyword;
     }
 
-    if (typeKey) {
-      args[typeKey] = "restaurant";
+    const requestedIncludedTypes = normalizeStringArray(params.includedTypes);
+    const fallbackIncludedTypes =
+      requestedIncludedTypes ?? normalizeStringArray("restaurant");
+    if (includedTypesKey && fallbackIncludedTypes) {
+      args[includedTypesKey] = fallbackIncludedTypes;
+    } else if (typeKey && fallbackIncludedTypes) {
+      args[typeKey] =
+        fallbackIncludedTypes.length === 1
+          ? fallbackIncludedTypes[0]
+          : fallbackIncludedTypes;
+    }
+
+    const excludedTypes = normalizeStringArray(params.excludedTypes);
+    if (excludedTypesKey && excludedTypes) {
+      args[excludedTypesKey] = excludedTypes;
     }
 
     if (openNowKey && typeof params.openNow === "boolean") {
