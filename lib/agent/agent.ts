@@ -43,6 +43,7 @@ Required behavior:
 - If lat/lng is present and the user asks for restaurants/food/cafes, call the nearby_search tool BEFORE answering.
 - If nearby_search is unavailable or fails, call recommend_places to use internal rankings.
 - Normalize cuisine intents like "chinese food" to "Chinese restaurants" when calling tools.
+- If the user asks for more options (e.g. "show more", "more options", "more", "next"), set intent to "pagination" and reuse the previous search query.
 - Do not hallucinate places. Use tools for factual data.
 - Always respond with JSON only, matching this schema:
   {
@@ -190,6 +191,7 @@ export const runFoodBuddyAgent = async ({
           userIdHash: context.userIdHash,
           rawMessage: userMessage,
           locationEnabled: context.locationEnabled,
+          sessionId: context.sessionId,
         });
       } catch (err) {
         logger.error(
@@ -422,11 +424,21 @@ const mergeRecommendations = (
   base: RecommendationCardData[],
   next: RecommendationCardData[],
 ): RecommendationCardData[] => {
-  const seen = new Set(base.map((item) => item.placeId));
+  const buildKey = (item: RecommendationCardData) => {
+    const placeId = item.placeId?.trim();
+    if (placeId) {
+      return `place:${placeId.toLowerCase()}`;
+    }
+    const name = item.name?.trim().toLowerCase() ?? "";
+    const address = item.address?.trim().toLowerCase() ?? "";
+    return `fallback:${name}|${address}`;
+  };
+  const seen = new Set(base.map(buildKey));
   const merged = [...base];
   next.forEach((item) => {
-    if (!seen.has(item.placeId)) {
-      seen.add(item.placeId);
+    const key = buildKey(item);
+    if (!seen.has(key)) {
+      seen.add(key);
       merged.push(item);
     }
   });

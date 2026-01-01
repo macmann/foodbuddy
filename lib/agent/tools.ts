@@ -18,6 +18,7 @@ export type AgentToolContext = {
   userIdHash?: string;
   rawMessage?: string;
   locationEnabled?: boolean;
+  sessionId?: string;
 };
 
 type NearbySearchArgs = {
@@ -45,10 +46,88 @@ const MAX_RECOMMENDATIONS = 3;
 const MIN_RADIUS_METERS = 500;
 const MAX_RADIUS_METERS = 10_000;
 const DEFAULT_RADIUS_METERS = 1500;
+const PAGINATION_PHRASES = ["show more", "more options", "more", "next"];
+
+type LastSearchState = {
+  keyword: string;
+  radiusMeters: number;
+  nextPageToken?: string;
+};
+
+const lastSearchBySession = new Map<string, LastSearchState>();
 
 const clampRadiusMeters = (radius?: number): number => {
   const candidate = typeof radius === "number" && Number.isFinite(radius) ? radius : DEFAULT_RADIUS_METERS;
   return Math.min(MAX_RADIUS_METERS, Math.max(MIN_RADIUS_METERS, Math.round(candidate)));
+};
+
+const isPaginationMessage = (message?: string): boolean => {
+  if (!message) {
+    return false;
+  }
+  const normalized = message.toLowerCase().trim();
+  return PAGINATION_PHRASES.some((phrase) => normalized.includes(phrase));
+};
+
+const nextPaginationRadius = (currentRadius: number): number => {
+  const steps = [1500, 2500, 4000, 6000, 8000, 10_000];
+  const current = clampRadiusMeters(currentRadius);
+  const next = steps.find((step) => step > current) ?? current;
+  return clampRadiusMeters(next);
+};
+
+const getNextPageToken = (payload: unknown): string | undefined => {
+  if (!isRecord(payload)) {
+    return undefined;
+  }
+  const direct =
+    (typeof payload.nextPageToken === "string" && payload.nextPageToken) ||
+    (typeof payload.next_page_token === "string" && payload.next_page_token) ||
+    (typeof payload.pageToken === "string" && payload.pageToken) ||
+    (typeof payload.page_token === "string" && payload.page_token);
+  if (direct) {
+    return direct;
+  }
+  const data = payload.data;
+  if (isRecord(data)) {
+    return getNextPageToken(data);
+  }
+  return undefined;
+};
+
+const getLastSearch = (context: AgentToolContext): LastSearchState | null => {
+  if (!context.sessionId) {
+    return null;
+  }
+  return lastSearchBySession.get(context.sessionId) ?? null;
+};
+
+const setLastSearch = (
+  context: AgentToolContext,
+  state: LastSearchState,
+): void => {
+  if (!context.sessionId) {
+    return;
+  }
+  lastSearchBySession.set(context.sessionId, state);
+};
+
+const resolvePaginationOverride = (
+  context: AgentToolContext,
+  fallback: { keyword: string; radiusMeters: number },
+): { keyword: string; radiusMeters: number; nextPageToken?: string } | null => {
+  if (!isPaginationMessage(context.rawMessage)) {
+    return null;
+  }
+  const lastSearch = getLastSearch(context);
+  if (!lastSearch) {
+    return null;
+  }
+  return {
+    keyword: lastSearch.keyword || fallback.keyword,
+    radiusMeters: lastSearch.radiusMeters,
+    nextPageToken: lastSearch.nextPageToken,
+  };
 };
 
 const normalizeCandidate = (
@@ -256,8 +335,9 @@ const buildNearbySearchArgs = (
     lng: number;
     radiusMeters: number;
     keyword?: string;
-    excludedTypes?: string[] | string;
-  },
+  excludedTypes?: string[] | string;
+  nextPageToken?: string;
+},
 ): { args: Record<string, unknown>; logKeys: string[] } => {
   const schema = tool.inputSchema;
   const args: Record<string, unknown> = {};
@@ -280,6 +360,13 @@ const buildNearbySearchArgs = (
     "excludedtypes",
     "excluded_types",
     "excludetypes",
+  ]);
+  const nextPageTokenKey = matchSchemaKey(schema, [
+    "nextpagetoken",
+    "next_page_token",
+    "pagetoken",
+    "page_token",
+    "pageToken",
   ]);
 
   if (hasSchemaProperty(schema, "location") && (!latKey || !lngKey)) {
@@ -336,6 +423,11 @@ const buildNearbySearchArgs = (
     }
   }
 
+  if (nextPageTokenKey && params.nextPageToken) {
+    args[nextPageTokenKey] = params.nextPageToken;
+    logKeys.add("pageToken");
+  }
+
   return { args, logKeys: Array.from(logKeys) };
 };
 
@@ -351,6 +443,7 @@ const buildTextSearchArgs = (
     query: string;
     locationText?: string;
     location?: { lat: number; lng: number };
+    nextPageToken?: string;
   },
 ): Record<string, unknown> => {
   const schema = tool.inputSchema;
@@ -359,6 +452,13 @@ const buildTextSearchArgs = (
   const locationKey = matchSchemaKey(schema, ["location", "near", "bias"]);
   const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
   const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
+  const nextPageTokenKey = matchSchemaKey(schema, [
+    "nextpagetoken",
+    "next_page_token",
+    "pagetoken",
+    "page_token",
+    "pageToken",
+  ]);
 
   const queryValue = params.locationText
     ? `${params.query} in ${params.locationText}`
@@ -381,6 +481,10 @@ const buildTextSearchArgs = (
     args.location = { lat: params.location.lat, lng: params.location.lng };
   } else if (locationKey && params.locationText) {
     args[locationKey] = params.locationText;
+  }
+
+  if (nextPageTokenKey && params.nextPageToken) {
+    args[nextPageTokenKey] = params.nextPageToken;
   }
 
   return args;
@@ -412,9 +516,23 @@ const nearbySearch = async (
   }
 
   const parsed = parseQuery(args.query);
-  const initialRadiusMeters = clampRadiusMeters(
+  const fallbackKeyword = parsed.keyword ?? args.query;
+  const fallbackRadius = clampRadiusMeters(
     args.radius_m ?? context.radius_m ?? parsed.radiusMeters,
   );
+  const paginationOverride = resolvePaginationOverride(context, {
+    keyword: fallbackKeyword,
+    radiusMeters: fallbackRadius,
+  });
+  const keyword = paginationOverride?.keyword ?? fallbackKeyword;
+  const baseRadiusMeters = clampRadiusMeters(
+    paginationOverride?.radiusMeters ?? fallbackRadius,
+  );
+  const initialRadiusMeters = paginationOverride?.nextPageToken
+    ? baseRadiusMeters
+    : paginationOverride
+      ? nextPaginationRadius(baseRadiusMeters)
+      : baseRadiusMeters;
   const retryRadii =
     initialRadiusMeters <= 1000 ? [initialRadiusMeters, 3000, 8000] : [initialRadiusMeters];
 
@@ -428,7 +546,7 @@ const nearbySearch = async (
       lat: latitude,
       lng: longitude,
       radiusMeters,
-      keyword: parsed.keyword,
+      keyword,
       openNow: parsed.openNow,
       requestId: context.requestId,
     });
@@ -455,6 +573,13 @@ const nearbySearch = async (
     normalizeCandidate(candidate, { lat: latitude, lng: longitude }),
   );
 
+  if (keyword) {
+    setLastSearch(context, {
+      keyword,
+      radiusMeters: usedRadiusMeters,
+    });
+  }
+
   return {
     results: normalized,
     usedLatitude: latitude,
@@ -470,7 +595,21 @@ const recommendInternal = async (
 ): Promise<Record<string, unknown>> => {
   try {
     const parsed = parseQuery(args.query);
-    const initialRadiusMeters = clampRadiusMeters(context.radius_m ?? parsed.radiusMeters);
+    const fallbackKeyword = parsed.keyword ?? args.query;
+    const fallbackRadius = clampRadiusMeters(context.radius_m ?? parsed.radiusMeters);
+    const paginationOverride = resolvePaginationOverride(context, {
+      keyword: fallbackKeyword,
+      radiusMeters: fallbackRadius,
+    });
+    const keyword = paginationOverride?.keyword ?? fallbackKeyword;
+    const baseRadiusMeters = clampRadiusMeters(
+      paginationOverride?.radiusMeters ?? fallbackRadius,
+    );
+    const initialRadiusMeters = paginationOverride?.nextPageToken
+      ? baseRadiusMeters
+      : paginationOverride
+        ? nextPaginationRadius(baseRadiusMeters)
+        : baseRadiusMeters;
     const locationText = pickFirstString(
       args.location,
       parsed.locationText,
@@ -479,6 +618,7 @@ const recommendInternal = async (
     const selection = resolvePlacesProvider();
     const providerName = selection.providerName;
     const provider = selection.provider;
+    const nextPageToken = paginationOverride?.nextPageToken;
     const mcpUrl = (process.env.COMPOSIO_MCP_URL ?? "").trim().replace(/^"+|"+$/g, "");
     const composioApiKey = process.env.COMPOSIO_API_KEY ?? "";
 
@@ -503,7 +643,7 @@ const recommendInternal = async (
         lat: locationCoords?.lat,
         lng: locationCoords?.lng,
         radius_m: initialRadiusMeters,
-        keyword: parsed.keyword,
+        keyword,
         rawMessage: context.rawMessage ?? args.query,
         locationEnabled: context.locationEnabled,
         locationText,
@@ -526,7 +666,6 @@ const recommendInternal = async (
     }
 
     if (providerName === "MCP") {
-      const keyword = parsed.keyword ?? args.query;
       try {
         const tools = await listMcpTools({
           url: mcpUrl,
@@ -590,6 +729,7 @@ const recommendInternal = async (
           places: RecommendationCardData[];
           parsedCount: number;
           mappedCount: number;
+          nextPageToken?: string;
         } => {
           const { contentText } = resolveMcpPayloadFromResult(payload);
           const rawText = contentText ?? "";
@@ -615,6 +755,7 @@ const recommendInternal = async (
           }
 
           const placesCandidate = isRecord(parsed) ? parsed.data?.places : undefined;
+          const nextPageTokenParsed = getNextPageToken(parsed ?? payload);
           if (!Array.isArray(placesCandidate)) {
             return {
               success: false,
@@ -622,6 +763,7 @@ const recommendInternal = async (
               places: [],
               parsedCount: 0,
               mappedCount: 0,
+              nextPageToken: nextPageTokenParsed,
             };
           }
 
@@ -658,6 +800,7 @@ const recommendInternal = async (
             places: mappedPlaces.slice(0, limit),
             parsedCount: placesCandidate.length,
             mappedCount: mappedPlaces.length,
+            nextPageToken: nextPageTokenParsed,
           };
         };
 
@@ -692,9 +835,27 @@ const recommendInternal = async (
         let normalized: RecommendationCardData[] = [];
         let parsedPlacesCount = 0;
         let mappedPlacesCount = 0;
+        let parsedNextPageToken: string | undefined;
+        let usedRadiusMeters = baseRadiusMeters;
+        let supportsNextPageToken = false;
         const searchTool = selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
         if (searchTool) {
-          for (const radiusMeters of retryRadii) {
+          supportsNextPageToken = Boolean(
+            matchSchemaKey(searchTool.inputSchema, [
+              "nextpagetoken",
+              "next_page_token",
+              "pagetoken",
+              "page_token",
+              "pageToken",
+            ]),
+          );
+          const radiusMetersToUse =
+            paginationOverride && (!nextPageToken || !supportsNextPageToken)
+              ? nextPaginationRadius(baseRadiusMeters)
+              : baseRadiusMeters;
+          usedRadiusMeters = radiusMetersToUse;
+          const radiiToTry = paginationOverride ? [radiusMetersToUse] : retryRadii;
+          for (const radiusMeters of radiiToTry) {
             try {
               let payload: unknown;
               if (searchTool.name === resolvedTools.textSearch?.name) {
@@ -704,6 +865,7 @@ const recommendInternal = async (
                     query: keyword,
                     locationText,
                     location: locationCoords,
+                    nextPageToken: supportsNextPageToken ? nextPageToken : undefined,
                   }),
                 );
               } else {
@@ -712,6 +874,7 @@ const recommendInternal = async (
                   lng: locationCoords.lng,
                   radiusMeters,
                   keyword,
+                  nextPageToken: supportsNextPageToken ? nextPageToken : undefined,
                 });
                 payload = await callTool(searchTool, nearbyArgs, logKeys);
               }
@@ -719,6 +882,7 @@ const recommendInternal = async (
               normalized = parsed.places;
               parsedPlacesCount = parsed.parsedCount;
               mappedPlacesCount = parsed.mappedCount;
+              parsedNextPageToken = parsed.nextPageToken;
             } catch (err) {
               if (isUnknownToolError(err)) {
                 const refreshed = await refreshTools();
@@ -744,6 +908,14 @@ const recommendInternal = async (
           "MCP recommend_places results parsed",
         );
 
+        if (keyword) {
+          setLastSearch(context, {
+            keyword,
+            radiusMeters: usedRadiusMeters,
+            nextPageToken: parsedNextPageToken ?? nextPageToken,
+          });
+        }
+
         return { results: normalized };
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : "Unknown MCP error.";
@@ -763,7 +935,7 @@ const recommendInternal = async (
       channel: "WEB",
       userIdHash: context.userIdHash ?? "unknown",
       location: locationCoords,
-      queryText: args.query,
+      queryText: keyword,
       radiusMetersOverride: initialRadiusMeters,
       requestId: context.requestId,
     });
@@ -793,6 +965,13 @@ const recommendInternal = async (
         rationale: item.explanation,
       };
     });
+
+    if (keyword) {
+      setLastSearch(context, {
+        keyword,
+        radiusMeters: initialRadiusMeters,
+      });
+    }
 
     return {
       results: normalized,
