@@ -13,6 +13,7 @@ import {
   reviewConfidence,
 } from "./scoring";
 import { getRagEnrichmentForPlaces, upsertRagDocForPlace } from "../rag";
+import { sanitizeToJson } from "../utils/json";
 
 type RecommendationInput = {
   channel: "WEB" | "TELEGRAM" | "VIBER" | "MESSENGER";
@@ -44,17 +45,6 @@ type ParsedQuery = {
   budget?: "cheap" | "mid" | "expensive";
   llm?: unknown | null;
   locationText?: string;
-};
-
-const toJsonSafe = <T,>(value: T): unknown => {
-  if (value === undefined) {
-    return null;
-  }
-  try {
-    return JSON.parse(JSON.stringify(value));
-  } catch {
-    return null;
-  }
 };
 
 const DEFAULT_RADIUS_METERS = 1500;
@@ -308,7 +298,10 @@ export const parseQuery = (queryText: string): ParsedQuery => {
   const lower = queryText.toLowerCase();
   const openNow = lower.includes("open");
   const locationMatch = lower.match(/\bin\s+(.+)$/);
-  const locationText = locationMatch?.[1]?.trim();
+  const locationText =
+    locationMatch && locationMatch.index !== undefined
+      ? queryText.slice(locationMatch.index + 3).trim()
+      : undefined;
   const baseQuery =
     locationMatch && locationMatch.index !== undefined
       ? lower.slice(0, locationMatch.index).trim()
@@ -389,7 +382,7 @@ export const writeRecommendationEvent = async (
         latencyMs: metadata.latencyMs,
         errorMessage: metadata.errorMessage,
         resultCount: metadata.resultCount,
-        parsedConstraints: toJsonSafe(metadata.parsedConstraints) as any,
+        parsedConstraints: sanitizeToJson(metadata.parsedConstraints) as any,
         requestId: input.requestId ?? null,
         locationEnabled: input.locationEnabled ?? null,
         radiusMeters: input.radiusMeters ?? null,
