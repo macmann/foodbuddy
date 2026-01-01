@@ -754,7 +754,8 @@ const recommendInternal = async (
             );
           }
 
-          const placesCandidate = isRecord(parsed) ? parsed.data?.places : undefined;
+          const data = isRecord(parsed) ? parsed["data"] : undefined;
+          const placesCandidate = isRecord(data) ? data["places"] : undefined;
           const nextPageTokenParsed = getNextPageToken(parsed ?? payload);
           if (!Array.isArray(placesCandidate)) {
             return {
