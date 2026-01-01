@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { Prisma } from "@prisma/client";
+
 import { sanitizeToJson } from "./json";
 
 const assertIsRecord = (value: unknown): asserts value is Record<string, unknown> => {
@@ -23,10 +25,10 @@ test("sanitizeToJson removes functions and handles unknown types", () => {
   assertIsRecord(result);
   assert.equal(result.name, "demo");
   assert.equal(result.count, 2);
-  assert.equal(result.handler, null);
-  assert.deepEqual(result.list, [1, null, "42"]);
+  assert.equal(result.handler, Prisma.DbNull);
+  assert.deepEqual(result.list, [1, Prisma.DbNull, "42"]);
   const nested = result.nested;
   assertIsRecord(nested);
-  assert.equal(nested.value, null);
+  assert.equal(nested.value, Prisma.DbNull);
   assert.equal(nested.date, "2024-01-01T00:00:00.000Z");
 });
