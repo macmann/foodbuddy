@@ -35,8 +35,8 @@ type Attempt = {
   radius: number;
   endpoint: string;
   resultsCount: number;
-  keyword?: string;
-  googleStatus?: string;
+  keyword: string | undefined;
+  googleStatus: string | undefined;
 };
 
 const coerceNumber = (value: unknown): number | undefined => {
@@ -85,7 +85,7 @@ const sanitizeAttempts = (raw: unknown): Attempt[] | undefined => {
         googleStatus,
       };
     })
-    .filter((attempt): attempt is Attempt => Boolean(attempt));
+    .filter((attempt): attempt is Attempt => attempt !== null);
   return attempts.length > 0 ? attempts : undefined;
 };
 
