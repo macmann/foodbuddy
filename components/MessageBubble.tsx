@@ -7,6 +7,8 @@ export type MessageBubbleData = {
   createdAt: number;
   error?: boolean;
   retryContent?: string;
+  responseError?: boolean;
+  errorDetails?: unknown;
 };
 
 type MessageBubbleProps = {
@@ -23,6 +25,8 @@ const formatTime = (timestamp: number) =>
 
 export default function MessageBubble({ message, children, onRetry }: MessageBubbleProps) {
   const isUser = message.role === "user";
+  const debugDetails =
+    message.errorDetails === undefined ? null : JSON.stringify(message.errorDetails, null, 2);
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -35,8 +39,23 @@ export default function MessageBubble({ message, children, onRetry }: MessageBub
               : "bg-slate-100 text-slate-900"
         }`}
       >
-        <p className="whitespace-pre-line">{message.content}</p>
+        {message.content && <p className="whitespace-pre-line">{message.content}</p>}
         {children}
+        {message.responseError && (
+          <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            <p>Couldn’t fetch nearby places. Try again.</p>
+            {debugDetails && (
+              <details className="mt-2 text-rose-600">
+                <summary className="cursor-pointer text-xs font-semibold">
+                  Debug details
+                </summary>
+                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-xs">
+                  {debugDetails}
+                </pre>
+              </details>
+            )}
+          </div>
+        )}
         {message.error && message.retryContent && onRetry && (
           <button
             type="button"

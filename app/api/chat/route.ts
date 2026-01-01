@@ -229,12 +229,18 @@ const buildAgentResponse = ({
   const primary = recommendations[0] ?? null;
   const alternatives = recommendations.slice(1, 6);
   const resolvedStatus = status ?? (hasRecommendations ? "OK" : "NO_RESULTS");
+  const successfull = resolvedStatus !== "ERROR" && resolvedStatus !== "fallback";
   return {
     message,
     status: resolvedStatus,
     primary,
     alternatives,
     places: recommendations,
+    successfull,
+    error:
+      resolvedStatus === "ERROR" || resolvedStatus === "fallback"
+        ? { message: errorMessage ?? "Unable to fetch nearby places." }
+        : undefined,
     meta: {
       source: "agent",
       toolCallCount,
@@ -602,6 +608,8 @@ export async function POST(request: Request) {
       message,
       status: llmTimedOut ? "fallback" : "ERROR",
       places: [],
+      successfull: false,
+      error: { message: "Please share a location so I can find nearby places." },
       meta: {
         source: "internal",
         toolCallCount: 0,
@@ -642,6 +650,7 @@ export async function POST(request: Request) {
         ? "NO_RESULTS"
         : "OK";
     const responseStatus = llmTimedOut ? "fallback" : status;
+    const successfull = responseStatus !== "ERROR" && responseStatus !== "fallback";
 
     await writeRecommendationEvent(
       {
@@ -687,6 +696,11 @@ export async function POST(request: Request) {
       message,
       status: responseStatus,
       places: payload,
+      successfull,
+      error:
+        responseStatus === "ERROR" || responseStatus === "fallback"
+          ? { message: providerErrorMessage ?? "Unable to fetch nearby places." }
+          : undefined,
       meta: {
         source: "internal",
         toolCallCount: 0,
@@ -737,6 +751,8 @@ export async function POST(request: Request) {
       message: "Sorry, something went wrong while finding places.",
       status: "ERROR",
       places: [],
+      successfull: false,
+      error: { message: errorMessage },
       meta: {
         source: "internal",
         toolCallCount: 0,
