@@ -6,11 +6,14 @@ import Composer from "../components/Composer";
 import FeedbackCard from "../components/FeedbackCard";
 import LocationGate from "../components/LocationGate";
 import MessageBubble, { type MessageBubbleData } from "../components/MessageBubble";
+import PlaceCard from "../components/PlaceCard";
 import RecommendationCard from "../components/RecommendationCard";
 import type { ChatResponse, RecommendationCardData } from "../lib/types/chat";
 
 type ChatMessage = MessageBubbleData & {
   recommendations?: RecommendationCardData[];
+  places?: RecommendationCardData[];
+  alternatives?: RecommendationCardData[];
   status?: ChatResponse["status"];
   providerError?: boolean;
   errorMessage?: string;
@@ -234,13 +237,16 @@ export default function HomePageClient() {
           debug: data.debug,
         });
       }
-      const extras = [
-        ...(data.primary ? [data.primary] : []),
-        ...(data.alternatives ?? []),
-      ].filter(isRecommendationCard) as RecommendationCardData[];
-      const combined = (data.places ?? []).concat(extras);
+      const recommendations = (data.primary ? [data.primary] : []).filter(
+        isRecommendationCard,
+      ) as RecommendationCardData[];
+      const alternatives = (data.alternatives ?? []).filter(
+        isRecommendationCard,
+      ) as RecommendationCardData[];
+      const places = (data.places ?? []).filter(isRecommendationCard) as RecommendationCardData[];
+      const combined = places.concat(recommendations, alternatives);
       const seen = new Set<string>();
-      const recommendations = combined.filter((item) => {
+      const feedbackRecommendations = combined.filter((item) => {
         if (seen.has(item.placeId)) {
           return false;
         }
@@ -248,9 +254,9 @@ export default function HomePageClient() {
         return true;
       });
 
-      if (recommendations.length > 0) {
-        setFeedbackOptions(recommendations);
-        setSelectedPlaceId(recommendations[0].placeId);
+      if (feedbackRecommendations.length > 0) {
+        setFeedbackOptions(feedbackRecommendations);
+        setSelectedPlaceId(feedbackRecommendations[0].placeId);
         setFeedbackPromptVisible(false);
         setFeedbackSubmitted(false);
         setFeedbackError(null);
@@ -269,12 +275,14 @@ export default function HomePageClient() {
         data.successfull === false || Boolean(data.error) || data.status === "fallback";
       const errorDetails =
         data.error ?? (data.status === "fallback" ? { status: data.status } : undefined);
-      const hasPlaces = Array.isArray(data.places) && data.places.length > 0;
+      const hasPlaces = places.length > 0;
       const assistantMessage: ChatMessage = {
         id: createId(),
         role: "assistant",
         content: hasPlaces ? "" : data.message ?? "Here are a few places to consider.",
         recommendations,
+        alternatives,
+        places,
         status: data.status,
         providerError,
         errorMessage: data.meta?.errorMessage,
@@ -430,6 +438,13 @@ export default function HomePageClient() {
             {messages.map((message) => (
               <div key={message.id} className="space-y-3">
                 <MessageBubble message={message} onRetry={handleRetry}>
+                  {message.places && message.places.length > 0 && (
+                    <div className="mt-3 grid gap-3">
+                      {message.places.map((place) => (
+                        <PlaceCard key={place.placeId} place={place} />
+                      ))}
+                    </div>
+                  )}
                   {message.recommendations && message.recommendations.length > 0 && (
                     <div className="mt-3 grid gap-3">
                       {message.recommendations.map((rec) => (
@@ -448,12 +463,25 @@ export default function HomePageClient() {
                       </button>
                     </div>
                   )}
+                  {message.alternatives && message.alternatives.length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {message.alternatives.slice(0, 4).map((alt) => (
+                        <span
+                          key={alt.placeId}
+                          className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm"
+                        >
+                          {alt.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   {message.role === "assistant" &&
-                    message.status === "NO_RESULTS" &&
-                    (!message.recommendations || message.recommendations.length === 0) && (
+                    message.status &&
+                    message.status.toUpperCase() !== "OK" &&
+                    (!message.places || message.places.length === 0) && (
                       <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-                        No results yet. Try increasing the radius, changing cuisine, or
-                        searching a nearby neighborhood.
+                        We couldn’t find nearby spots right now. Try a different location
+                        or tweak your search.
                       </div>
                     )}
                   {message.role === "assistant" && message.providerError && (
