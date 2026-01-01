@@ -5,6 +5,7 @@ import { createRequestContext } from "../../../lib/request";
 import { rateLimit } from "../../../lib/rateLimit";
 import { parseQuery, recommend, writeRecommendationEvent } from "../../../lib/reco/engine";
 import { runFoodBuddyAgent } from "../../../lib/agent/agent";
+import { getLocationCoords, normalizeGeoLocation, type GeoLocation } from "../../../lib/location";
 import { haversineMeters } from "../../../lib/reco/scoring";
 import { getLLMSettings } from "../../../lib/settings/llm";
 import { isAllowedModel } from "../../../lib/agent/model";
@@ -13,6 +14,109 @@ import type {
   ChatResponseDebug,
   RecommendationCardData,
 } from "../../../lib/types/chat";
+
+type ChatRequestBody = {
+  anonId: string;
+  sessionId: string;
+  location?: { lat: number; lng: number };
+  locationText?: string;
+  neighborhood?: string;
+  message: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  radius_m?: number | null;
+  locationEnabled?: boolean;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const parseChatRequestBody = (payload: unknown): ChatRequestBody | null => {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const anonId = typeof payload.anonId === "string" ? payload.anonId : "";
+  const sessionId = typeof payload.sessionId === "string" ? payload.sessionId : "";
+  const message = typeof payload.message === "string" ? payload.message : "";
+  if (!anonId || !sessionId || !message) {
+    return null;
+  }
+  const location =
+    isRecord(payload.location) &&
+    typeof payload.location.lat === "number" &&
+    Number.isFinite(payload.location.lat) &&
+    typeof payload.location.lng === "number" &&
+    Number.isFinite(payload.location.lng)
+      ? { lat: payload.location.lat, lng: payload.location.lng }
+      : undefined;
+  const latitude =
+    typeof payload.latitude === "number" && Number.isFinite(payload.latitude)
+      ? payload.latitude
+      : null;
+  const longitude =
+    typeof payload.longitude === "number" && Number.isFinite(payload.longitude)
+      ? payload.longitude
+      : null;
+  const radius_m =
+    typeof payload.radius_m === "number" && Number.isFinite(payload.radius_m)
+      ? payload.radius_m
+      : null;
+  const locationText =
+    typeof payload.locationText === "string" ? payload.locationText : undefined;
+  const neighborhood =
+    typeof payload.neighborhood === "string" ? payload.neighborhood : undefined;
+  const locationEnabled =
+    typeof payload.locationEnabled === "boolean" ? payload.locationEnabled : undefined;
+  return {
+    anonId,
+    sessionId,
+    message,
+    location,
+    locationText,
+    neighborhood,
+    latitude,
+    longitude,
+    radius_m,
+    locationEnabled,
+  };
+};
+
+const buildToolDebug = (
+  toolDebug?: Record<string, unknown>,
+): ChatResponseDebug["tool"] | undefined => {
+  if (!toolDebug) {
+    return undefined;
+  }
+  const tool = toolDebug.tool;
+  if (!isRecord(tool)) {
+    return undefined;
+  }
+  const attempts = Array.isArray(tool.attempts)
+    ? tool.attempts
+        .filter(isRecord)
+        .filter(
+          (attempt) =>
+            typeof attempt.radius === "number" &&
+            typeof attempt.endpoint === "string" &&
+            typeof attempt.resultsCount === "number",
+        )
+        .map((attempt) => ({
+          radius: attempt.radius,
+          endpoint: attempt.endpoint,
+          resultsCount: attempt.resultsCount,
+          keyword: typeof attempt.keyword === "string" ? attempt.keyword : undefined,
+          googleStatus:
+            typeof attempt.googleStatus === "string" ? attempt.googleStatus : undefined,
+        }))
+    : undefined;
+  return {
+    endpointUsed: typeof tool.endpointUsed === "string" ? tool.endpointUsed : undefined,
+    provider: typeof tool.provider === "string" ? tool.provider : undefined,
+    googleStatus: typeof tool.googleStatus === "string" ? tool.googleStatus : undefined,
+    error_message: typeof tool.error_message === "string" ? tool.error_message : undefined,
+    attempts: attempts && attempts.length > 0 ? attempts : undefined,
+  };
+};
 
 const buildRecommendationPayload = (
   result: Awaited<ReturnType<typeof recommend>>,
@@ -66,6 +170,9 @@ const buildAgentResponse = ({
 }): ChatResponse => {
   const hasRecommendations = recommendations.length > 0;
   const trimmedMessage = agentMessage?.trim();
+  const toolDebugInfo = isRecord(toolDebug) ? toolDebug : undefined;
+  const toolInfo = buildToolDebug(toolDebugInfo);
+  const toolProvider = toolInfo?.provider;
   const message =
     trimmedMessage && trimmedMessage.length > 0
       ? trimmedMessage
@@ -88,20 +195,14 @@ const buildAgentResponse = ({
       fallbackUsed,
       latencyMs,
       errorMessage,
-      debug:
-        errorMessage || (toolDebug as { tool?: { provider?: string } })?.tool?.provider
-          ? {
-              provider: (toolDebug as { tool?: { provider?: string } })?.tool?.provider,
-              error: errorMessage,
-            }
-          : undefined,
+      debug: errorMessage || toolProvider ? { provider: toolProvider, error: errorMessage } : undefined,
     },
     debug: debugEnabled
       ? {
           source: "llm_agent",
           toolCallCount,
           requestId,
-          tool: (toolDebug as { tool?: ChatResponseDebug["tool"] })?.tool,
+          tool: toolInfo,
         }
       : undefined,
   };
@@ -135,20 +236,9 @@ export async function POST(request: Request) {
     return response;
   };
 
-  const body = (await request.json()) as {
-    anonId: string;
-    sessionId: string;
-    location?: { lat: number; lng: number };
-    locationText?: string;
-    neighborhood?: string;
-    message: string;
-    latitude?: number | null;
-    longitude?: number | null;
-    radius_m?: number | null;
-    locationEnabled?: boolean;
-  };
+  const body = parseChatRequestBody(await request.json());
 
-  if (!body?.anonId || !body?.sessionId || !body?.message) {
+  if (!body) {
     return respondError(400, { error: "Invalid request" });
   }
 
@@ -157,17 +247,25 @@ export async function POST(request: Request) {
   }
 
   const userIdHash = hashUserId(body.anonId);
-  const latitude =
-    typeof body.latitude === "number" ? body.latitude : body.location?.lat;
-  const longitude =
-    typeof body.longitude === "number" ? body.longitude : body.location?.lng;
-  const hasCoordinates = latitude != null && longitude != null;
-  const location = hasCoordinates ? { lat: latitude, lng: longitude } : null;
-  const eventLocation = location
-    ? { lat: roundCoord(location.lat), lng: roundCoord(location.lng) }
-    : null;
-  const locationEnabled = Boolean(body.locationEnabled);
   const locationText = body.neighborhood ?? body.locationText;
+  const geoLocation = normalizeGeoLocation({
+    coordinates: body.location,
+    latitude: body.latitude ?? undefined,
+    longitude: body.longitude ?? undefined,
+    locationText,
+  });
+  const coords = getLocationCoords(geoLocation);
+  const hasCoordinates = Boolean(coords);
+  const eventLocation: GeoLocation =
+    coords
+      ? {
+          kind: "coords",
+          coords: { lat: roundCoord(coords.lat), lng: roundCoord(coords.lng) },
+        }
+      : geoLocation.kind === "text"
+        ? geoLocation
+        : { kind: "none" };
+  const locationEnabled = Boolean(body.locationEnabled);
   const locale = request.headers.get("accept-language")?.split(",")[0];
   const radius_m =
     typeof body.radius_m === "number" && Number.isFinite(body.radius_m) && body.radius_m > 0
@@ -191,7 +289,7 @@ export async function POST(request: Request) {
     "Incoming chat request",
   );
 
-  if (locationEnabled && (latitude == null || longitude == null)) {
+  if (locationEnabled && !coords) {
     return respondError(400, {
       error: "LOCATION_REQUIRED",
       message: "Please share your location or set a neighborhood.",
@@ -231,7 +329,7 @@ export async function POST(request: Request) {
     }
 
     if (reason === "agent_success") {
-      if (!location && !locationText) {
+      if (geoLocation.kind === "none") {
         const message =
           "Tell me a neighborhood or enable location so I can find nearby places.";
         await writeRecommendationEvent(
@@ -283,8 +381,7 @@ export async function POST(request: Request) {
       const agentResult = await runFoodBuddyAgent({
         userMessage: body.message,
         context: {
-          location,
-          locationText,
+          location: geoLocation,
           radius_m,
           sessionId: body.sessionId,
           requestId,
@@ -298,9 +395,9 @@ export async function POST(request: Request) {
       const recommendations =
         agentResult.places && agentResult.places.length > 0
           ? agentResult.places
-          : ([agentResult.primary, ...(agentResult.alternatives ?? [])].filter(
-              Boolean,
-            ) as RecommendationCardData[]);
+          : [agentResult.primary, ...(agentResult.alternatives ?? [])].filter(
+              (item): item is RecommendationCardData => Boolean(item),
+            );
       const resultCount = recommendations.length;
       const status = agentResult.status;
       const parsedConstraints = parseQuery(body.message);
@@ -312,17 +409,17 @@ export async function POST(request: Request) {
           toolResponses: agentResult.rawResponse,
         }),
       );
-      const toolDebug = agentResult.toolDebug as
-        | { tool?: { googleStatus?: string; error_message?: string } }
-        | undefined;
-      if (toolDebug?.tool || agentResult.toolCallCount > 0) {
+      const toolInfo = buildToolDebug(
+        isRecord(agentResult.toolDebug) ? agentResult.toolDebug : undefined,
+      );
+      if (toolInfo || agentResult.toolCallCount > 0) {
         logger.info(
           {
             requestId,
             tool: "recommend_places",
             returnedCount: resultCount,
-            googleStatusIfAny: toolDebug?.tool?.googleStatus,
-            errorIfAny: toolDebug?.tool?.error_message,
+            googleStatusIfAny: toolInfo?.googleStatus,
+            errorIfAny: toolInfo?.error_message,
           },
           "Tool result summary",
         );
@@ -402,23 +499,10 @@ export async function POST(request: Request) {
     );
   }
 
-  const llmSettings = undefined;
-  const resolvedSettings = undefined;
-  const agentEnabled =
-    typeof (settings as any)?.agentEnabled === "boolean"
-      ? (settings as any).agentEnabled
-      : typeof (llmSettings as any)?.agentEnabled === "boolean"
-        ? (llmSettings as any).agentEnabled
-        : typeof (resolvedSettings as any)?.agentEnabled === "boolean"
-          ? (resolvedSettings as any).agentEnabled
-          : false;
-  const llmModel =
-    (settings as any)?.llmModel ??
-    (llmSettings as any)?.llmModel ??
-    (resolvedSettings as any)?.llmModel ??
-    null;
+  const agentEnabled = settings?.llmEnabled === true;
+  const llmModel = settings?.llmModel ?? null;
 
-  if (!location) {
+  if (!coords) {
     logger.info({ ...logContext, path: "fallback" }, "Missing location for chat");
     const message = "Please share a location so I can find nearby places.";
     await writeRecommendationEvent(
@@ -470,13 +554,13 @@ export async function POST(request: Request) {
     const recommendation = await recommend({
       channel: "WEB",
       userIdHash,
-      location,
+      location: coords,
       queryText: body.message,
       radiusMetersOverride: radiusMeters,
       requestId,
     });
 
-    const payload = buildRecommendationPayload(recommendation, location);
+    const payload = buildRecommendationPayload(recommendation, coords);
     const [primary, ...alternatives] = payload;
     const recommendedPlaceIds = payload.map((item) => item.placeId);
     const resultCount = payload.length;

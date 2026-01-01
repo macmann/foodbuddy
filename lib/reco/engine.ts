@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 
 import { prisma } from "../db";
 import { logger } from "../logger";
+import { getLocationCoords, type GeoLocation } from "../location";
 import { resolvePlacesProvider } from "../places";
 import type { PlaceCandidate, PlaceDetails } from "../places";
 import {
@@ -14,6 +15,9 @@ import {
 } from "./scoring";
 import { getRagEnrichmentForPlaces, upsertRagDocForPlace } from "../rag";
 import { sanitizeToJson } from "../utils/json";
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
 
 type RecommendationInput = {
   channel: "WEB" | "TELEGRAM" | "VIBER" | "MESSENGER";
@@ -71,7 +75,7 @@ type RecommendationMetadata = {
 type RecommendationEventInput = {
   channel: "WEB" | "TELEGRAM" | "VIBER" | "MESSENGER";
   userIdHash: string;
-  location?: { lat: number; lng: number } | null;
+  location?: GeoLocation | null;
   locationEnabled?: boolean;
   radiusMeters?: number | null;
   queryText: string;
@@ -370,19 +374,20 @@ export const writeRecommendationEvent = async (
   metadata: RecommendationMetadata,
 ): Promise<void> => {
   try {
+    const coords = getLocationCoords(input.location ?? undefined);
     await prisma.recommendationEvent.create({
       data: {
         channel: input.channel,
         userIdHash: input.userIdHash,
-        userLat: input.location?.lat ?? null,
-        userLng: input.location?.lng ?? null,
+        userLat: coords?.lat ?? null,
+        userLng: coords?.lng ?? null,
         queryText: input.queryText,
         recommendedPlaceIds: metadata.recommendedPlaceIds,
         status: metadata.status,
         latencyMs: metadata.latencyMs,
         errorMessage: metadata.errorMessage,
         resultCount: metadata.resultCount,
-        parsedConstraints: sanitizeToJson(metadata.parsedConstraints) as any,
+        parsedConstraints: sanitizeToJson(metadata.parsedConstraints),
         requestId: input.requestId ?? null,
         locationEnabled: input.locationEnabled ?? null,
         radiusMeters: input.radiusMeters ?? null,
@@ -397,12 +402,16 @@ export const writeRecommendationEvent = async (
   } catch (error) {
     const prismaError =
       error instanceof Prisma.PrismaClientKnownRequestError ? error : null;
-    const meta = prismaError?.meta as { modelName?: string; table?: string } | undefined;
+    const meta = prismaError?.meta;
+    const metaModel =
+      isRecord(meta) && typeof meta.modelName === "string" ? meta.modelName : undefined;
+    const metaTable =
+      isRecord(meta) && typeof meta.table === "string" ? meta.table : undefined;
     logger.error(
       {
         error,
         prismaCode: prismaError?.code,
-        prismaModel: meta?.modelName ?? meta?.table,
+        prismaModel: metaModel ?? metaTable,
       },
       "Failed to persist recommendation event. Run `prisma migrate deploy` to ensure migrations are applied.",
     );

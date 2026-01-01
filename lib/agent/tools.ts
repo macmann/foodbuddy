@@ -1,4 +1,5 @@
 import { logger } from "../logger";
+import { getLocationCoords, getLocationText, type GeoLocation } from "../location";
 import { invalidateMcpToolsCache, listMcpTools, mcpCall } from "../mcp/client";
 import { extractPlacesFromMcpResult } from "../mcp/placesExtractor";
 import { resolveMcpPayloadFromResult } from "../mcp/resultParser";
@@ -12,7 +13,7 @@ import type { RecommendationCardData } from "../types";
 import type { ToolSchema } from "./types";
 
 export type AgentToolContext = {
-  location?: { lat: number; lng: number } | null;
+  location: GeoLocation;
   radius_m?: number;
   requestId?: string;
   userIdHash?: string;
@@ -90,12 +91,15 @@ const pickFirstString = (...values: Array<unknown | undefined>): string | undefi
   return undefined;
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
 const getSchemaProperties = (schema?: Record<string, unknown>): string[] => {
   if (!schema) {
     return [];
   }
-  const properties = (schema as { properties?: Record<string, unknown> }).properties;
-  if (!properties || typeof properties !== "object") {
+  const properties = schema.properties;
+  if (!isRecord(properties)) {
     return [];
   }
   return Object.keys(properties);
@@ -132,16 +136,43 @@ const toNumber = (value: unknown): number | undefined => {
   return undefined;
 };
 
-const extractLatLng = (payload: Record<string, unknown>): { lat?: number; lng?: number } => {
-  const lat = toNumber(payload.lat ?? payload.latitude ?? payload.y);
-  const lng = toNumber(payload.lng ?? payload.lon ?? payload.longitude ?? payload.x);
+const parseNearbySearchArgs = (args: Record<string, unknown>): NearbySearchArgs => {
+  const query = typeof args.query === "string" ? args.query : "";
+  return {
+    query,
+    latitude: toNumber(args.latitude),
+    longitude: toNumber(args.longitude),
+    radius_m: toNumber(args.radius_m),
+  };
+};
+
+const parseRecommendArgs = (args: Record<string, unknown>): RecommendInternalArgs => {
+  return {
+    query: typeof args.query === "string" ? args.query : "",
+    location: typeof args.location === "string" ? args.location : undefined,
+  };
+};
+
+const parseGeocodeArgs = (args: Record<string, unknown>): GeocodeArgs => {
+  return {
+    place: typeof args.place === "string" ? args.place : "",
+  };
+};
+
+const extractLatLng = (payload: unknown): { lat?: number; lng?: number } => {
+  if (!isRecord(payload)) {
+    return {};
+  }
+  const record = payload;
+  const lat = toNumber(record.lat ?? record.latitude ?? record.y);
+  const lng = toNumber(record.lng ?? record.lon ?? record.longitude ?? record.x);
   if (lat !== undefined && lng !== undefined) {
     return { lat, lng };
   }
 
-  const location = payload.location ?? payload.geometry;
-  if (location && typeof location === "object") {
-    return extractLatLng(location as Record<string, unknown>);
+  const location = record.location ?? record.geometry;
+  if (isRecord(location)) {
+    return extractLatLng(location);
   }
 
   return {};
@@ -156,12 +187,19 @@ const buildMapsUrl = (placeId?: string): string | undefined => {
 
 const normalizeMcpPlace = (
   payload: Record<string, unknown>,
-  origin?: Coordinates | null,
+  origin?: Coordinates,
 ): RecommendationCardData | null => {
+  const displayName = payload.displayName;
+  const displayNameText =
+    isRecord(displayName) && typeof displayName.text === "string"
+      ? displayName.text
+      : undefined;
+  const displayNameAlt =
+    typeof payload.display_name === "string" ? payload.display_name : undefined;
   const name = pickFirstString(
     payload.name,
-    (payload as { displayName?: { text?: string } }).displayName?.text,
-    (payload as { display_name?: string }).display_name,
+    displayNameText,
+    displayNameAlt,
   );
   const placeId = pickFirstString(payload.placeId, payload.place_id, payload.id, payload.placeid);
   const { lat, lng } = extractLatLng(payload);
@@ -344,8 +382,9 @@ const nearbySearch = async (
     };
   }
   const provider = selection.provider;
-  const latitude = args.latitude ?? context.location?.lat;
-  const longitude = args.longitude ?? context.location?.lng;
+  const coords = getLocationCoords(context.location);
+  const latitude = args.latitude ?? coords?.lat;
+  const longitude = args.longitude ?? coords?.lng;
 
   if (latitude == null || longitude == null) {
     return { error: "Location coordinates are required for nearby search." };
@@ -411,7 +450,11 @@ const recommendInternal = async (
   try {
     const parsed = parseQuery(args.query);
     const initialRadiusMeters = clampRadiusMeters(context.radius_m ?? parsed.radiusMeters);
-    const locationText = args.location ?? parsed.locationText;
+    const locationText = pickFirstString(
+      args.location,
+      parsed.locationText,
+      getLocationText(context.location),
+    );
     const selection = resolvePlacesProvider();
     const providerName = selection.providerName;
     const provider = selection.provider;
@@ -422,15 +465,12 @@ const recommendInternal = async (
       throw new Error("COMPOSIO_MCP_URL must start with http:// or https://");
     }
 
-    let location: Coordinates | null = null;
-    if (context.location) {
-      location = context.location;
-    }
+    let locationCoords = getLocationCoords(context.location);
 
-    if (locationText && provider) {
+    if (!locationCoords && locationText && provider) {
       const geocoded = await provider.geocode(locationText, context.requestId);
       if (geocoded) {
-        location = { lat: geocoded.lat, lng: geocoded.lng };
+        locationCoords = { lat: geocoded.lat, lng: geocoded.lng };
       }
     }
 
@@ -438,9 +478,9 @@ const recommendInternal = async (
       {
         requestId: context.requestId,
         provider: providerName,
-        hasCoordinates: Boolean(location),
-        lat: location?.lat,
-        lng: location?.lng,
+        hasCoordinates: Boolean(locationCoords),
+        lat: locationCoords?.lat,
+        lng: locationCoords?.lng,
         radius_m: initialRadiusMeters,
         keyword: parsed.keyword,
         rawMessage: context.rawMessage ?? args.query,
@@ -457,7 +497,7 @@ const recommendInternal = async (
       });
     }
 
-    if (!location && providerName !== "MCP") {
+    if (!locationCoords && providerName !== "MCP") {
       return {
         results: [],
         debug: { error: "Location is required for recommendations." },
@@ -527,24 +567,32 @@ const recommendInternal = async (
             );
           }
           return places
-            .map((place) => normalizeMcpPlace(place, location))
-            .filter(Boolean) as RecommendationCardData[];
+            .map((place) => normalizeMcpPlace(place, locationCoords))
+            .filter((place): place is RecommendationCardData => Boolean(place));
         };
 
-        if (!location && locationText && resolvedTools.geocode) {
+        if (!locationCoords && locationText && resolvedTools.geocode) {
           const geocodeArgs = buildGeocodeArgs(resolvedTools.geocode, locationText);
           try {
             const geocodePayload = await callTool(resolvedTools.geocode, geocodeArgs);
             const { payload } = resolveMcpPayloadFromResult(geocodePayload);
-            const coords = extractLatLng((payload ?? {}) as Record<string, unknown>);
+            const coords = extractLatLng(payload ?? {});
             if (coords.lat !== undefined && coords.lng !== undefined) {
-              location = { lat: coords.lat, lng: coords.lng };
+              locationCoords = { lat: coords.lat, lng: coords.lng };
             }
           } catch (err) {
             if (isUnknownToolError(err)) {
               await refreshTools();
             }
           }
+        }
+
+        if (!locationCoords) {
+          return buildProviderFallbackResult({
+            errorMessage:
+              "Location coordinates are required. Share your GPS location or provide a neighborhood.",
+            providerName,
+          });
         }
 
         const retryRadii = Array.from(
@@ -552,56 +600,36 @@ const recommendInternal = async (
         );
 
         let normalized: RecommendationCardData[] = [];
-        if (location) {
-          const searchTool = selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
-          if (searchTool) {
-            for (const radiusMeters of retryRadii) {
-              const toolArgs =
-                searchTool.name === resolvedTools.textSearch?.name
-                  ? buildTextSearchArgs(searchTool, {
-                      query: keyword,
-                      locationText,
-                      location,
-                    })
-                  : buildNearbySearchArgs(searchTool, {
-                      lat: location.lat,
-                      lng: location.lng,
-                      radiusMeters,
-                      keyword,
-                    });
-              try {
-                const payload = await callTool(searchTool, toolArgs);
-                normalized = parsePlaces(payload);
-              } catch (err) {
-                if (isUnknownToolError(err)) {
-                  const refreshed = await refreshTools();
-                  resolvedTools.nearbySearch = refreshed.resolved.nearbySearch;
-                  resolvedTools.textSearch = refreshed.resolved.textSearch;
-                } else {
-                  throw err;
-                }
-              }
-              if (normalized.length > 0) {
-                break;
+        const searchTool = selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
+        if (searchTool) {
+          for (const radiusMeters of retryRadii) {
+            const toolArgs =
+              searchTool.name === resolvedTools.textSearch?.name
+                ? buildTextSearchArgs(searchTool, {
+                    query: keyword,
+                    locationText,
+                    location: locationCoords,
+                  })
+                : buildNearbySearchArgs(searchTool, {
+                    lat: locationCoords.lat,
+                    lng: locationCoords.lng,
+                    radiusMeters,
+                    keyword,
+                  });
+            try {
+              const payload = await callTool(searchTool, toolArgs);
+              normalized = parsePlaces(payload);
+            } catch (err) {
+              if (isUnknownToolError(err)) {
+                const refreshed = await refreshTools();
+                resolvedTools.nearbySearch = refreshed.resolved.nearbySearch;
+                resolvedTools.textSearch = refreshed.resolved.textSearch;
+              } else {
+                throw err;
               }
             }
-          }
-        }
-
-        if (normalized.length === 0 && resolvedTools.textSearch) {
-          const textSearchArgs = buildTextSearchArgs(resolvedTools.textSearch, {
-            query: keyword,
-            locationText,
-            location: location ?? undefined,
-          });
-          try {
-            const payload = await callTool(resolvedTools.textSearch, textSearchArgs);
-            normalized = parsePlaces(payload);
-          } catch (err) {
-            if (isUnknownToolError(err)) {
-              await refreshTools();
-            } else {
-              throw err;
+            if (normalized.length > 0) {
+              break;
             }
           }
         }
@@ -623,34 +651,47 @@ const recommendInternal = async (
       }
     }
 
+    if (!locationCoords) {
+      return {
+        results: [],
+        debug: { error: "Location is required for recommendations." },
+      };
+    }
+
     const response = await recommend({
       channel: "WEB",
       userIdHash: context.userIdHash ?? "unknown",
-      location,
+      location: locationCoords,
       queryText: args.query,
       radiusMetersOverride: initialRadiusMeters,
       requestId: context.requestId,
     });
 
-    const normalized = [response.primary, ...response.alternatives]
-      .filter(Boolean)
-      .map((item) => ({
-        placeId: item!.place.placeId,
-        name: item!.place.name,
-        rating: item!.place.rating,
-        reviewCount: item!.place.userRatingsTotal,
-        priceLevel: item!.place.priceLevel,
-        lat: item!.place.lat,
-        lng: item!.place.lng,
-        distanceMeters: haversineMeters(location!, {
-          lat: item!.place.lat,
-          lng: item!.place.lng,
-        }),
-        openNow: item!.place.openNow,
-        address: item!.place.address,
-        mapsUrl: item!.place.mapsUrl,
-        rationale: item!.explanation,
-      }));
+    const candidates = [response.primary, ...response.alternatives].filter(
+      (item): item is NonNullable<typeof item> => Boolean(item),
+    );
+    const normalized = candidates.map((item) => {
+      const distanceMeters = locationCoords
+        ? haversineMeters(locationCoords, {
+            lat: item.place.lat,
+            lng: item.place.lng,
+          })
+        : undefined;
+      return {
+        placeId: item.place.placeId,
+        name: item.place.name,
+        rating: item.place.rating,
+        reviewCount: item.place.userRatingsTotal,
+        priceLevel: item.place.priceLevel,
+        lat: item.place.lat,
+        lng: item.place.lng,
+        distanceMeters,
+        openNow: item.place.openNow,
+        address: item.place.address,
+        mapsUrl: item.place.mapsUrl,
+        rationale: item.explanation,
+      };
+    });
 
     return {
       results: normalized,
@@ -729,7 +770,7 @@ export const toolSchemas: ToolSchema[] = [
 export const toolHandlers: Record<string, ToolHandler> = {
   nearby_search: async (args, context) => {
     const start = Date.now();
-    const result = await nearbySearch(args as NearbySearchArgs, context);
+    const result = await nearbySearch(parseNearbySearchArgs(args), context);
     logger.info(
       {
         requestId: context.requestId,
@@ -742,7 +783,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
   },
   recommend_places: async (args, context) => {
     const start = Date.now();
-    const result = await recommendInternal(args as RecommendInternalArgs, context);
+    const result = await recommendInternal(parseRecommendArgs(args), context);
     logger.info(
       {
         requestId: context.requestId,
@@ -755,7 +796,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
   },
   geocode_location: async (args, context) => {
     const start = Date.now();
-    const result = await geocodeLocation(args as GeocodeArgs, context);
+    const result = await geocodeLocation(parseGeocodeArgs(args), context);
     logger.info(
       {
         requestId: context.requestId,
@@ -773,11 +814,15 @@ export const extractRecommendations = (
   toolResult: Record<string, unknown>,
 ): { primary: RecommendationCardData | null; alternatives: RecommendationCardData[] } => {
   if (toolName === "nearby_search" || toolName === "recommend_places") {
-    const results = toolResult.results as RecommendationCardData[] | undefined;
+    const results = toolResult.results;
     if (!Array.isArray(results)) {
       return { primary: null, alternatives: [] };
     }
-    return normalizeRecommendations(results);
+    const normalizedResults = results.filter(
+      (result): result is RecommendationCardData =>
+        isRecord(result) && typeof result.placeId === "string",
+    );
+    return normalizeRecommendations(normalizedResults);
   }
 
   return { primary: null, alternatives: [] };

@@ -1,7 +1,15 @@
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object");
 
-export const sanitizeToJson = (value: unknown, seen = new WeakSet<object>()): unknown => {
+export const sanitizeToJson = (value: unknown, seen = new WeakSet<object>()): JsonValue => {
   if (value === undefined) {
     return null;
   }
@@ -28,7 +36,7 @@ export const sanitizeToJson = (value: unknown, seen = new WeakSet<object>()): un
       return null;
     }
     seen.add(value);
-    const sanitized: Record<string, unknown> = {};
+    const sanitized: { [key: string]: JsonValue } = {};
     Object.entries(value).forEach(([key, entry]) => {
       const cleaned = sanitizeToJson(entry, seen);
       sanitized[key] = cleaned === undefined ? null : cleaned;
