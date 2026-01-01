@@ -350,7 +350,7 @@ const buildNearbySearchArgs = (
     ? "keyword"
     : hasSchemaProperty(schema, "query")
       ? "query"
-      : matchSchemaKey(schema, ["text", "search"]);
+      : matchSchemaKey(schema, ["textquery", "searchterm", "text", "search"]);
   const includedTypesKey = matchSchemaKey(schema, [
     "includedtypes",
     "included_types",
@@ -390,9 +390,7 @@ const buildNearbySearchArgs = (
       : undefined;
   if (keywordKey && keywordValue) {
     args[keywordKey] = keywordValue;
-    if (keywordKey === "keyword" || keywordKey === "query") {
-      logKeys.add(keywordKey);
-    }
+    logKeys.add(keywordKey);
   }
 
   if (includedTypesKey && keywordValue) {

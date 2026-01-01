@@ -373,7 +373,14 @@ export class ComposioMcpProvider implements PlacesProvider {
     const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
     const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
     const radiusKey = matchSchemaKey(schema, ["radius", "radius_m", "distance"]);
-    const keywordKey = matchSchemaKey(schema, ["keyword", "query", "text", "search"]);
+    const keywordKey = matchSchemaKey(schema, [
+      "keyword",
+      "query",
+      "textquery",
+      "searchterm",
+      "text",
+      "search",
+    ]);
     const includedTypesKey = matchSchemaKey(schema, [
       "includedtypes",
       "included_types",
