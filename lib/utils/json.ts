@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 
-type JsonOut = Prisma.InputJsonValue;
+type JsonOut = Prisma.InputJsonValue | Prisma.JsonNullValueInput;
 type JsonFieldOut = JsonOut | Prisma.NullableJsonNullValueInput | undefined;
 
 export type JsonValue =
@@ -14,12 +14,17 @@ export type JsonValue =
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object");
 
+const isNullableJsonNullValue = (
+  value: JsonFieldOut,
+): value is Prisma.NullableJsonNullValueInput =>
+  value === Prisma.DbNull || value === Prisma.JsonNull;
+
 const toEmbeddedJson = (value: JsonFieldOut): JsonOut | undefined => {
   if (value === undefined) {
     return undefined;
   }
-  if (value === Prisma.DbNull || value === Prisma.JsonNull) {
-    return null;
+  if (isNullableJsonNullValue(value)) {
+    return Prisma.JsonNull;
   }
   return value;
 };
@@ -55,10 +60,10 @@ export const sanitizeToJson = (
       return undefined;
     }
     seen.add(value);
-    const sanitized = value.map((item) => {
+    const sanitized = value.flatMap((item) => {
       const cleaned = sanitizeToJson(item, seen);
       const embedded = toEmbeddedJson(cleaned);
-      return embedded ?? null;
+      return embedded === undefined ? [] : [embedded];
     });
     return sanitized as JsonOut;
   }
