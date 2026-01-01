@@ -256,15 +256,31 @@ const buildNearbySearchArgs = (
     lng: number;
     radiusMeters: number;
     keyword?: string;
+    excludedTypes?: string[] | string;
   },
-): Record<string, unknown> => {
+): { args: Record<string, unknown>; logKeys: string[] } => {
   const schema = tool.inputSchema;
   const args: Record<string, unknown> = {};
+  const logKeys = new Set<string>();
 
   const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
   const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
   const radiusKey = matchSchemaKey(schema, ["radius", "radius_m", "distance"]);
-  const keywordKey = matchSchemaKey(schema, ["keyword", "query", "text", "search"]);
+  const keywordKey = hasSchemaProperty(schema, "keyword")
+    ? "keyword"
+    : hasSchemaProperty(schema, "query")
+      ? "query"
+      : matchSchemaKey(schema, ["text", "search"]);
+  const includedTypesKey = matchSchemaKey(schema, [
+    "includedtypes",
+    "included_types",
+    "includetypes",
+  ]);
+  const excludedTypesKey = matchSchemaKey(schema, [
+    "excludedtypes",
+    "excluded_types",
+    "excludetypes",
+  ]);
 
   if (hasSchemaProperty(schema, "location") && (!latKey || !lngKey)) {
     args.location = { lat: params.lat, lng: params.lng };
@@ -281,11 +297,46 @@ const buildNearbySearchArgs = (
     args[radiusKey] = params.radiusMeters;
   }
 
-  if (keywordKey && params.keyword) {
-    args[keywordKey] = params.keyword;
+  const keywordValue =
+    typeof params.keyword === "string" && params.keyword.trim().length > 0
+      ? params.keyword.trim()
+      : undefined;
+  if (keywordKey && keywordValue) {
+    args[keywordKey] = keywordValue;
+    if (keywordKey === "keyword" || keywordKey === "query") {
+      logKeys.add(keywordKey);
+    }
   }
 
-  return args;
+  if (includedTypesKey && keywordValue) {
+    const lowerKeyword = keywordValue.toLowerCase();
+    const includedTypes = new Set<string>();
+    if (lowerKeyword.includes("noodle")) {
+      includedTypes.add("restaurant");
+      includedTypes.add("meal_takeaway");
+    }
+    if (lowerKeyword.includes("takeaway") || lowerKeyword.includes("takeout")) {
+      includedTypes.add("meal_takeaway");
+    }
+    if (includedTypes.size > 0) {
+      args[includedTypesKey] = Array.from(includedTypes);
+      logKeys.add("includedTypes");
+    }
+  }
+
+  if (excludedTypesKey && params.excludedTypes !== undefined) {
+    const excludedValues = Array.isArray(params.excludedTypes)
+      ? params.excludedTypes.filter((item): item is string => typeof item === "string")
+      : typeof params.excludedTypes === "string"
+        ? [params.excludedTypes]
+        : [];
+    if (excludedValues.length > 0) {
+      args[excludedTypesKey] = excludedValues;
+      logKeys.add("excludedTypes");
+    }
+  }
+
+  return { args, logKeys: Array.from(logKeys) };
 };
 
 const buildGeocodeArgs = (tool: ToolDefinition, text: string): Record<string, unknown> => {
@@ -505,13 +556,20 @@ const recommendInternal = async (
           return { tools: refreshed, resolved: updated };
         };
 
-        const callTool = async (tool: ToolDefinition, toolArgs: Record<string, unknown>) => {
+        const callTool = async (
+          tool: ToolDefinition,
+          toolArgs: Record<string, unknown>,
+          extraLogKeys: string[] = [],
+        ) => {
+          const argsKeys = Array.from(
+            new Set([...Object.keys(toolArgs), ...extraLogKeys]),
+          );
           logger.info(
             {
               requestId: context.requestId,
               provider: "MCP",
               tool: tool.name,
-              argsKeys: Object.keys(toolArgs),
+              argsKeys,
             },
             "MCP tool call prepared",
           );
@@ -637,21 +695,26 @@ const recommendInternal = async (
         const searchTool = selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
         if (searchTool) {
           for (const radiusMeters of retryRadii) {
-            const toolArgs =
-              searchTool.name === resolvedTools.textSearch?.name
-                ? buildTextSearchArgs(searchTool, {
+            try {
+              let payload: unknown;
+              if (searchTool.name === resolvedTools.textSearch?.name) {
+                payload = await callTool(
+                  searchTool,
+                  buildTextSearchArgs(searchTool, {
                     query: keyword,
                     locationText,
                     location: locationCoords,
-                  })
-                : buildNearbySearchArgs(searchTool, {
-                    lat: locationCoords.lat,
-                    lng: locationCoords.lng,
-                    radiusMeters,
-                    keyword,
-                  });
-            try {
-              const payload = await callTool(searchTool, toolArgs);
+                  }),
+                );
+              } else {
+                const { args: nearbyArgs, logKeys } = buildNearbySearchArgs(searchTool, {
+                  lat: locationCoords.lat,
+                  lng: locationCoords.lng,
+                  radiusMeters,
+                  keyword,
+                });
+                payload = await callTool(searchTool, nearbyArgs, logKeys);
+              }
               const parsed = parsePlaces(payload);
               normalized = parsed.places;
               parsedPlacesCount = parsed.parsedCount;
