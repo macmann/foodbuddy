@@ -201,6 +201,16 @@ const hasSchemaProperty = (schema: Record<string, unknown> | undefined, name: st
   return keys.some((key) => key.toLowerCase() === name.toLowerCase());
 };
 
+const resolveKeywordSchemaKey = (schema: Record<string, unknown> | undefined) => {
+  if (hasSchemaProperty(schema, "keyword")) {
+    return "keyword";
+  }
+  if (hasSchemaProperty(schema, "query")) {
+    return "query";
+  }
+  return matchSchemaKey(schema, ["textquery", "searchterm", "text", "search"]);
+};
+
 const toNumber = (value: unknown): number | undefined => {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -338,7 +348,7 @@ const buildNearbySearchArgs = (
   excludedTypes?: string[] | string;
   nextPageToken?: string;
 },
-): { args: Record<string, unknown>; logKeys: string[] } => {
+): { args: Record<string, unknown>; logKeys: string[]; keywordOmitted: boolean } => {
   const schema = tool.inputSchema;
   const args: Record<string, unknown> = {};
   const logKeys = new Set<string>();
@@ -346,11 +356,7 @@ const buildNearbySearchArgs = (
   const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
   const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
   const radiusKey = matchSchemaKey(schema, ["radius", "radius_m", "distance"]);
-  const keywordKey = hasSchemaProperty(schema, "keyword")
-    ? "keyword"
-    : hasSchemaProperty(schema, "query")
-      ? "query"
-      : matchSchemaKey(schema, ["textquery", "searchterm", "text", "search"]);
+  const keywordKey = resolveKeywordSchemaKey(schema);
   const includedTypesKey = matchSchemaKey(schema, [
     "includedtypes",
     "included_types",
@@ -388,6 +394,7 @@ const buildNearbySearchArgs = (
     typeof params.keyword === "string" && params.keyword.trim().length > 0
       ? params.keyword.trim()
       : undefined;
+  const keywordOmitted = Boolean(keywordValue && !keywordKey);
   if (keywordKey && keywordValue) {
     args[keywordKey] = keywordValue;
     logKeys.add(keywordKey);
@@ -426,7 +433,7 @@ const buildNearbySearchArgs = (
     logKeys.add("pageToken");
   }
 
-  return { args, logKeys: Array.from(logKeys) };
+  return { args, logKeys: Array.from(logKeys), keywordOmitted };
 };
 
 const buildGeocodeArgs = (tool: ToolDefinition, text: string): Record<string, unknown> => {
@@ -837,7 +844,32 @@ const recommendInternal = async (
         let parsedNextPageToken: string | undefined;
         let usedRadiusMeters = baseRadiusMeters;
         let supportsNextPageToken = false;
-        const searchTool = selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
+        const nearbyKeywordKey = resolvedTools.nearbySearch
+          ? resolveKeywordSchemaKey(resolvedTools.nearbySearch.inputSchema)
+          : undefined;
+        const shouldPreferTextSearch =
+          Boolean(keyword) &&
+          Boolean(resolvedTools.textSearch) &&
+          Boolean(resolvedTools.nearbySearch) &&
+          !nearbyKeywordKey;
+        if (shouldPreferTextSearch) {
+          logger.info(
+            {
+              requestId: context.requestId,
+              provider: "MCP",
+              tool: resolvedTools.textSearch?.name,
+              keyword,
+              nearbySchemaKeys: getSchemaProperties(
+                resolvedTools.nearbySearch?.inputSchema,
+              ),
+            },
+            "MCP nearby search lacks keyword field; using text search",
+          );
+        }
+        const selectedTool = selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
+        const searchTool = shouldPreferTextSearch
+          ? resolvedTools.textSearch ?? selectedTool
+          : selectedTool;
         if (searchTool) {
           supportsNextPageToken = Boolean(
             matchSchemaKey(searchTool.inputSchema, [
@@ -868,13 +900,28 @@ const recommendInternal = async (
                   }),
                 );
               } else {
-                const { args: nearbyArgs, logKeys } = buildNearbySearchArgs(searchTool, {
-                  lat: locationCoords.lat,
-                  lng: locationCoords.lng,
-                  radiusMeters,
-                  keyword,
-                  nextPageToken: supportsNextPageToken ? nextPageToken : undefined,
-                });
+                const { args: nearbyArgs, logKeys, keywordOmitted } = buildNearbySearchArgs(
+                  searchTool,
+                  {
+                    lat: locationCoords.lat,
+                    lng: locationCoords.lng,
+                    radiusMeters,
+                    keyword,
+                    nextPageToken: supportsNextPageToken ? nextPageToken : undefined,
+                  },
+                );
+                if (keywordOmitted) {
+                  logger.info(
+                    {
+                      requestId: context.requestId,
+                      provider: "MCP",
+                      tool: searchTool.name,
+                      keyword,
+                      schemaKeys: getSchemaProperties(searchTool.inputSchema),
+                    },
+                    "MCP nearby search keyword omitted; no matching field",
+                  );
+                }
                 payload = await callTool(searchTool, nearbyArgs, logKeys);
               }
               const parsed = parsePlaces(payload);
