@@ -53,4 +53,6 @@ export type ChatResponse = {
   places: RecommendationCardData[];
   meta: AgentMeta;
   debug?: ChatResponseDebug;
+  successfull?: boolean;
+  error?: unknown;
 };

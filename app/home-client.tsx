@@ -14,6 +14,8 @@ type ChatMessage = MessageBubbleData & {
   status?: ChatResponse["status"];
   providerError?: boolean;
   errorMessage?: string;
+  responseError?: boolean;
+  errorDetails?: unknown;
 };
 
 const isRecommendationCard = (
@@ -263,14 +265,21 @@ export default function HomePageClient() {
       }
 
       const providerError = data.status === "ERROR" && Boolean(data.meta?.errorMessage);
+      const responseError =
+        data.successfull === false || Boolean(data.error) || data.status === "fallback";
+      const errorDetails =
+        data.error ?? (data.status === "fallback" ? { status: data.status } : undefined);
+      const hasPlaces = Array.isArray(data.places) && data.places.length > 0;
       const assistantMessage: ChatMessage = {
         id: createId(),
         role: "assistant",
-        content: data.message ?? "Here are a few places to consider.",
+        content: hasPlaces ? "" : data.message ?? "Here are a few places to consider.",
         recommendations,
         status: data.status,
         providerError,
         errorMessage: data.meta?.errorMessage,
+        responseError,
+        errorDetails,
         error: data.status === "ERROR",
         createdAt: Date.now(),
       };
