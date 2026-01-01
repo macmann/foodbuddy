@@ -19,6 +19,7 @@ export type AgentMeta = {
   llmModel?: string;
   fallbackUsed?: boolean;
   latencyMs?: number;
+  errorMessage?: string;
 };
 
 export type ChatResponseDebug = {

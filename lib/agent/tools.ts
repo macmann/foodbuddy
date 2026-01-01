@@ -68,15 +68,6 @@ const normalizeRecommendations = (
   return { primary: primary ?? null, alternatives };
 };
 
-const stripWrappingQuotes = (value?: string): string | undefined => {
-  if (!value) {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  const match = trimmed.match(/^(['"])(.*)\1$/);
-  return match ? match[2] : trimmed;
-};
-
 const pickFirstString = (...values: Array<unknown | undefined>): string | undefined => {
   for (const value of values) {
     if (typeof value === "string" && value.trim().length > 0) {
@@ -208,6 +199,65 @@ const normalizeMcpPlace = (
   };
 };
 
+const buildGenericRecommendations = (
+  origin: Coordinates,
+  keyword?: string,
+): RecommendationCardData[] => {
+  const queryLabel = keyword?.trim() ? ` for ${keyword.trim()}` : "";
+  const templates = [
+    {
+      placeId: "generic-local-favorite",
+      name: "Local Favorite",
+      rationale: `A popular neighborhood pick${queryLabel}.`,
+    },
+    {
+      placeId: "generic-hidden-gem",
+      name: "Hidden Gem",
+      rationale: `A well-loved spot${queryLabel} with solid reviews.`,
+    },
+    {
+      placeId: "generic-family-friendly",
+      name: "Family Friendly",
+      rationale: `A reliable option${queryLabel} for groups and quick bites.`,
+    },
+  ];
+
+  return templates.map((template) => ({
+    placeId: template.placeId,
+    name: template.name,
+    rationale: template.rationale,
+    lat: origin.lat,
+    lng: origin.lng,
+    distanceMeters: 0,
+    mapsUrl: buildMapsUrl(template.name, origin.lat, origin.lng),
+    address: "Nearby",
+  }));
+};
+
+const buildMcpFallbackResult = ({
+  location,
+  keyword,
+  errorMessage,
+}: {
+  location: Coordinates;
+  keyword?: string;
+  errorMessage: string;
+}): Record<string, unknown> => {
+  return {
+    results: buildGenericRecommendations(location, keyword),
+    meta: {
+      fallbackUsed: true,
+      errorMessage,
+    },
+    debug: {
+      error: "mcp_failed",
+      tool: {
+        error_message: errorMessage,
+      },
+    },
+  };
+};
+
 const nearbySearch = async (
   args: NearbySearchArgs,
   context: AgentToolContext,
@@ -278,13 +328,17 @@ const recommendInternal = async (
   try {
     const providerName = process.env.GOOGLE_PROVIDER ?? "GOOGLE_MAPS";
     const isMcpProvider = providerName === "MCP";
-    const composioUrl = stripWrappingQuotes(process.env.COMPOSIO_MCP_URL);
+    const mcpUrl = (process.env.COMPOSIO_MCP_URL ?? "").trim().replace(/^"+|"+$/g, "");
     const composioApiKey = process.env.COMPOSIO_API_KEY;
     const hasComposioKey = Boolean(composioApiKey);
-    const hasComposioUrl = Boolean(composioUrl);
+    const hasComposioUrl = mcpUrl.length > 0;
     const envHasGoogleKey = Boolean(
       process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_API_KEY,
     );
+
+    if (isMcpProvider && hasComposioUrl && !mcpUrl.startsWith("http")) {
+      throw new Error("COMPOSIO_MCP_URL must start with http:// or https://");
+    }
 
     let location: Coordinates | null = null;
     if (context.location) {
@@ -318,10 +372,11 @@ const recommendInternal = async (
     );
 
     if (isMcpProvider && (!hasComposioKey || !hasComposioUrl)) {
-      return {
-        results: [],
-        debug: { error: "missing_composio_env" },
-      };
+      return buildMcpFallbackResult({
+        location: location ?? { lat: 0, lng: 0 },
+        keyword: parsed.keyword ?? args.query,
+        errorMessage: "Missing COMPOSIO_MCP_URL or COMPOSIO_API_KEY for MCP provider.",
+      });
     }
 
     if (!location) {
@@ -333,12 +388,15 @@ const recommendInternal = async (
 
     if (isMcpProvider) {
       const keyword = parsed.keyword ?? args.query;
-      const response = await fetch(composioUrl!, {
+      const headers = {
+        Accept: "application/json, text/event-stream",
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache",
+        "x-api-key": composioApiKey!,
+      };
+      const response = await fetch(mcpUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": composioApiKey!,
-        },
+        headers,
         body: JSON.stringify({
           tool: "google_maps_places_search",
           arguments: {
@@ -352,23 +410,29 @@ const recommendInternal = async (
 
       if (!response.ok) {
         const responseText = await response.text();
+        const errorMessage = `MCP request failed with status ${response.status}: ${responseText}`;
         logger.warn(
           {
             requestId: context.requestId,
             status: response.status,
             responseText,
+            headers: {
+              ...headers,
+              "x-api-key": "[redacted]",
+            },
           },
           "Composio MCP recommend_places failed",
         );
-        return { results: [] };
+        return buildMcpFallbackResult({ location, keyword, errorMessage });
       }
 
       let payload: unknown = null;
       try {
         payload = await response.json();
       } catch (err) {
+        const errorMessage = "Failed to parse MCP response JSON.";
         logger.warn({ err, requestId: context.requestId }, "Composio MCP response parse failed");
-        return { results: [] };
+        return buildMcpFallbackResult({ location, keyword, errorMessage });
       }
 
       const places = extractPlacesArray(payload);
@@ -421,7 +485,17 @@ const recommendInternal = async (
       debug: response.debug,
     };
   } catch (err) {
+    const errorMessage =
+      err instanceof Error ? err.message : "Unknown error during recommend_places.";
     logger.error({ err, requestId: context.requestId }, "recommend_places failed");
+    if (process.env.GOOGLE_PROVIDER === "MCP") {
+      const safeLocation = { lat: 0, lng: 0 };
+      return buildMcpFallbackResult({
+        location: context.location ?? safeLocation,
+        keyword: (args as RecommendInternalArgs).query,
+        errorMessage,
+      });
+    }
     return { results: [], debug: { error: "recommend_places_failed" } };
   }
 };

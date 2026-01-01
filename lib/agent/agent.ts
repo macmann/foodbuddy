@@ -28,6 +28,7 @@ export type AgentResult = {
   toolCallCount: number;
   llmModel: string;
   fallbackUsed: boolean;
+  errorMessage?: string;
   rawResponse: Record<string, unknown>;
   parsedOutput?: ParsedAgentOutput;
   toolDebug?: Record<string, unknown>;
@@ -119,6 +120,7 @@ export const runFoodBuddyAgent = async ({
   let places: RecommendationCardData[] = [];
   let toolCallCount = 0;
   let fallbackUsed = false;
+  let errorMessage: string | undefined;
   let toolDebug: Record<string, unknown> | undefined;
 
   let lastAssistantText = "";
@@ -217,6 +219,13 @@ export const runFoodBuddyAgent = async ({
 
       if (toolCall.name === "recommend_places") {
         const debug = result.debug as Record<string, unknown> | undefined;
+        const meta = result.meta as { fallbackUsed?: boolean; errorMessage?: string } | undefined;
+        if (meta?.fallbackUsed) {
+          fallbackUsed = true;
+        }
+        if (meta?.errorMessage) {
+          errorMessage = meta.errorMessage;
+        }
         if (debug) {
           toolDebug = debug;
         }
@@ -245,6 +254,7 @@ export const runFoodBuddyAgent = async ({
         llmModel: settings.llmModel,
         toolCallCount,
         fallbackUsed,
+        errorMessage,
         rawResponse: {
           assistantText: lastAssistantText,
           toolResponses: lastToolResponse,
@@ -268,6 +278,7 @@ export const runFoodBuddyAgent = async ({
         llmModel: settings.llmModel,
         toolCallCount,
         fallbackUsed,
+        errorMessage,
         rawResponse: {
           assistantText: lastAssistantText,
           toolResponses: lastToolResponse,
@@ -300,6 +311,13 @@ export const runFoodBuddyAgent = async ({
     alternatives = primary ? places.slice(1, MAX_RECOMMENDATIONS) : [];
     fallbackUsed = true;
     lastToolResponse = fallbackResult;
+    const meta = fallbackResult.meta as { fallbackUsed?: boolean; errorMessage?: string } | undefined;
+    if (meta?.fallbackUsed) {
+      fallbackUsed = true;
+    }
+    if (meta?.errorMessage) {
+      errorMessage = meta.errorMessage;
+    }
     const debug = fallbackResult.debug as Record<string, unknown> | undefined;
     if (debug) {
       toolDebug = debug;
@@ -319,6 +337,7 @@ export const runFoodBuddyAgent = async ({
     llmModel: settings.llmModel,
     toolCallCount,
     fallbackUsed,
+    errorMessage,
     rawResponse: {
       assistantText: lastAssistantText,
       toolResponses: lastToolResponse,
@@ -405,6 +424,7 @@ const buildAgentResult = ({
   llmModel,
   toolCallCount,
   fallbackUsed,
+  errorMessage,
   rawResponse,
   parsedOutput,
   toolDebug,
@@ -414,6 +434,7 @@ const buildAgentResult = ({
   llmModel: string;
   toolCallCount: number;
   fallbackUsed: boolean;
+  errorMessage?: string;
   rawResponse: Record<string, unknown>;
   parsedOutput?: ParsedAgentOutput;
   toolDebug?: Record<string, unknown>;
@@ -431,6 +452,7 @@ const buildAgentResult = ({
     toolCallCount,
     llmModel,
     fallbackUsed,
+    errorMessage,
     rawResponse,
     parsedOutput,
     toolDebug,
