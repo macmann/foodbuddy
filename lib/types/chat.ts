@@ -20,6 +20,10 @@ export type AgentMeta = {
   fallbackUsed?: boolean;
   latencyMs?: number;
   errorMessage?: string;
+  debug?: {
+    provider?: string;
+    error?: string;
+  };
 };
 
 export type ChatResponseDebug = {
@@ -28,6 +32,7 @@ export type ChatResponseDebug = {
   requestId: string;
   tool?: {
     endpointUsed?: string;
+    provider?: string;
     googleStatus?: string;
     error_message?: string;
     attempts?: Array<{

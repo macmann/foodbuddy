@@ -1,6 +1,6 @@
 import { logger } from "../logger";
-import { extractJsonFromSse, isLikelySse } from "./sseParser";
-import type { JsonRpcResponse } from "./types";
+import { extractJsonFromSse } from "./sseParser";
+import type { JsonRpcResponse, ListToolsResult, ToolDefinition } from "./types";
 
 type McpCallOptions = {
   url: string;
@@ -10,8 +10,21 @@ type McpCallOptions = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const TOOLS_TTL_MS = 10 * 60 * 1000;
 
-const buildRequestId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const buildRequestId = () =>
+  typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+let toolsCache:
+  | {
+      expiresAt: number;
+      value: ListToolsResult;
+      url: string;
+      apiKey: string;
+    }
+  | null = null;
 
 const redactUrl = (rawUrl: string): string => {
   try {
@@ -62,12 +75,10 @@ export const mcpCall = async <T>({
   try {
     const headers: Record<string, string> = {
       Accept: "application/json, text/event-stream",
-      "content-type": "application/json",
+      "Content-Type": "application/json",
+      "Cache-Control": "no-cache",
       "x-api-key": apiKey,
     };
-    if (apiKey) {
-      headers.authorization = `Bearer ${apiKey}`;
-    }
     logger.debug(
       { accept: headers.Accept, method, requestId },
       "MCP request headers prepared",
@@ -105,11 +116,13 @@ export const mcpCall = async <T>({
   }
 
   const contentType = response.headers.get("content-type") ?? "";
-  const responseText = await response.text();
+  const responseText = contentType.toLowerCase().includes("text/event-stream")
+    ? await readEventStream(response)
+    : await response.text();
 
   let data: JsonRpcResponse<T> | null = null;
   try {
-    if (isLikelySse(responseText, contentType)) {
+    if (contentType.toLowerCase().includes("text/event-stream")) {
       data = extractJsonFromSse(responseText) as JsonRpcResponse<T>;
     } else {
       data = JSON.parse(responseText) as JsonRpcResponse<T>;
@@ -153,4 +166,66 @@ export const mcpCall = async <T>({
 
   logger.debug({ method, requestId }, "MCP request completed");
   return data.result as T;
+};
+
+export const listMcpTools = async ({
+  url,
+  apiKey,
+}: {
+  url: string;
+  apiKey: string;
+}): Promise<ToolDefinition[]> => {
+  const now = Date.now();
+  if (
+    toolsCache &&
+    toolsCache.expiresAt > now &&
+    toolsCache.url === url &&
+    toolsCache.apiKey === apiKey
+  ) {
+    return Array.isArray(toolsCache.value.tools) ? toolsCache.value.tools : [];
+  }
+
+  const result = await mcpCall<ListToolsResult>({
+    url,
+    apiKey,
+    method: "tools/list",
+    params: {},
+  });
+
+  const resolvedResult: ListToolsResult = {
+    tools: Array.isArray(result?.tools) ? result.tools : [],
+  };
+
+  toolsCache = {
+    expiresAt: now + TOOLS_TTL_MS,
+    value: resolvedResult,
+    url,
+    apiKey,
+  };
+
+  const toolNames = resolvedResult.tools.map((tool) => tool.name).filter(Boolean);
+  logger.debug({ toolCount: toolNames.length, toolNames }, "MCP tools listed");
+
+  return resolvedResult.tools;
+};
+
+const readEventStream = async (response: Response): Promise<string> => {
+  if (!response.body) {
+    return response.text();
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+  }
+
+  buffer += decoder.decode();
+  return buffer;
 };
