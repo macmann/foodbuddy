@@ -491,14 +491,26 @@ const buildTextSearchArgs = (
     query: string;
     locationText?: string;
     location?: { lat: number; lng: number };
+    radiusMeters?: number;
     nextPageToken?: string;
     maxResultCount?: number;
   },
 ): Record<string, unknown> => {
   const schema = tool.inputSchema;
   const args: Record<string, unknown> = {};
-  const queryKey = matchSchemaKey(schema, ["query", "text", "input", "search"]);
-  const locationKey = matchSchemaKey(schema, ["location", "near", "bias"]);
+  const queryKey = matchSchemaKey(schema, [
+    "textquery",
+    "query",
+    "text",
+    "input",
+    "search",
+  ]);
+  const locationBiasKey = matchSchemaKey(schema, [
+    "locationbias",
+    "location_bias",
+    "bias",
+  ]);
+  const locationKey = matchSchemaKey(schema, ["location", "near"]);
   const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
   const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
   const nextPageTokenKey = matchSchemaKey(schema, [
@@ -510,9 +522,17 @@ const buildTextSearchArgs = (
   ]);
   const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
 
-  const queryValue = params.locationText
+  const supportsLocationBias =
+    Boolean(locationBiasKey) ||
+    Boolean(latKey) ||
+    Boolean(lngKey) ||
+    hasSchemaProperty(schema, "location");
+  let queryValue = params.locationText
     ? `${params.query} in ${params.locationText}`
     : params.query;
+  if (params.location && !supportsLocationBias) {
+    queryValue = `${queryValue} near ${params.location.lat},${params.location.lng}`;
+  }
 
   if (queryKey) {
     args[queryKey] = queryValue;
@@ -520,7 +540,21 @@ const buildTextSearchArgs = (
     args.query = queryValue;
   }
 
-  if (params.location && (latKey || lngKey)) {
+  if (params.location && locationBiasKey) {
+    const radiusValue =
+      typeof params.radiusMeters === "number" && Number.isFinite(params.radiusMeters)
+        ? params.radiusMeters
+        : undefined;
+    args[locationBiasKey] = {
+      circle: {
+        center: {
+          latitude: params.location.lat,
+          longitude: params.location.lng,
+        },
+        ...(radiusValue ? { radius: radiusValue } : {}),
+      },
+    };
+  } else if (params.location && (latKey || lngKey)) {
     if (latKey) {
       args[latKey] = params.location.lat;
     }
@@ -982,6 +1016,7 @@ const recommendInternal = async (
                     query: keyword,
                     locationText,
                     location: locationCoords,
+                    radiusMeters,
                     nextPageToken: supportsNextPageToken ? nextPageToken : undefined,
                     maxResultCount,
                   }),
