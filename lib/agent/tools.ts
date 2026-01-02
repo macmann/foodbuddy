@@ -738,8 +738,11 @@ const recommendInternal = async (
           parsedCount: number;
           mappedCount: number;
           nextPageToken?: string;
+          message: string;
         } => {
-          const { contentText } = resolveMcpPayloadFromResult(payload);
+          const { payload: parsedPayload, contentText } = resolveMcpPayloadFromResult(
+            payload,
+          );
           const rawText = contentText ?? "";
           if (rawText) {
             logger.info(
@@ -752,27 +755,46 @@ const recommendInternal = async (
             );
           }
 
-          let parsed: unknown = null;
-          try {
-            parsed = rawText ? JSON.parse(rawText) : null;
-          } catch (error) {
-            logger.warn(
-              { error, requestId: context.requestId, provider: "MCP" },
-              "MCP content text JSON parse failed",
+          let parsed: unknown = parsedPayload;
+          if (!isRecord(parsed) && rawText) {
+            try {
+              parsed = JSON.parse(rawText);
+            } catch (error) {
+              logger.warn(
+                { error, requestId: context.requestId, provider: "MCP" },
+                "MCP content text JSON parse failed",
+              );
+            }
+          }
+
+          const parsedRecord = isRecord(parsed) ? parsed : undefined;
+          const successfull =
+            typeof parsedRecord?.successfull === "boolean"
+              ? parsedRecord.successfull
+              : undefined;
+          const errorMessage =
+            typeof parsedRecord?.error === "string" ? parsedRecord.error : undefined;
+          const logs = parsedRecord?.logs;
+          if (logs !== undefined) {
+            logger.info(
+              { requestId: context.requestId, provider: "MCP", logs },
+              "MCP logs received",
             );
           }
 
-          const data = isRecord(parsed) ? parsed["data"] : undefined;
-          const placesCandidate = isRecord(data) ? data["places"] : undefined;
+          const placesCandidate =
+            isRecord(parsed) && isRecord(parsed.data) ? parsed.data.places : undefined;
           const nextPageTokenParsed = getNextPageToken(parsed ?? payload);
-          if (!Array.isArray(placesCandidate)) {
+          const failureMessage = "Couldn't fetch nearby places. Please try again.";
+          if (successfull === false || !Array.isArray(placesCandidate)) {
             return {
               success: false,
-              error: "No places array",
+              error: errorMessage ?? "No places array",
               places: [],
               parsedCount: 0,
               mappedCount: 0,
               nextPageToken: nextPageTokenParsed,
+              message: failureMessage,
             };
           }
 
@@ -804,12 +826,14 @@ const recommendInternal = async (
             );
           }
 
+          const limitedPlaces = mappedPlaces.slice(0, limit);
           return {
             success: true,
-            places: mappedPlaces.slice(0, limit),
+            places: limitedPlaces,
             parsedCount: placesCandidate.length,
             mappedCount: mappedPlaces.length,
             nextPageToken: nextPageTokenParsed,
+            message: `Here are ${limitedPlaces.length} places near you.`,
           };
         };
 
@@ -845,6 +869,7 @@ const recommendInternal = async (
         let parsedPlacesCount = 0;
         let mappedPlacesCount = 0;
         let parsedNextPageToken: string | undefined;
+        let responseMessage: string | undefined;
         let usedRadiusMeters = baseRadiusMeters;
         let supportsNextPageToken = false;
         const nearbyKeywordKey = resolvedTools.nearbySearch
@@ -932,6 +957,7 @@ const recommendInternal = async (
               parsedPlacesCount = parsed.parsedCount;
               mappedPlacesCount = parsed.mappedCount;
               parsedNextPageToken = parsed.nextPageToken;
+              responseMessage = parsed.message;
             } catch (err) {
               if (isUnknownToolError(err)) {
                 const refreshed = await refreshTools();
@@ -965,7 +991,7 @@ const recommendInternal = async (
           });
         }
 
-        return { results: normalized };
+        return { results: normalized, message: responseMessage };
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : "Unknown MCP error.";
         logger.warn({ err, requestId: context.requestId }, "Composio MCP recommend_places failed");
