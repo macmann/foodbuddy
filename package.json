@@ -8,6 +8,7 @@
     "prebuild": "node scripts/guard-no-pages-router.mjs",
     "build": "next build",
     "postbuild": "node scripts/standalone-copy-assets.mjs",
+    "prestart": "bash scripts/prisma-migrate-deploy.sh",
     "start": "bash scripts/render-start.sh",
     "lint": "next lint",
     "postinstall": "prisma generate",
