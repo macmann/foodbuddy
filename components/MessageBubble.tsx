@@ -8,7 +8,6 @@ export type MessageBubbleData = {
   error?: boolean;
   retryContent?: string;
   responseError?: boolean;
-  errorDetails?: unknown;
 };
 
 type MessageBubbleProps = {
