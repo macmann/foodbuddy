@@ -1,5 +1,8 @@
 import { parseJsonFromText, resolveMcpPayloadFromResult } from "./resultParser";
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
 const extractPlacesArray = (payload: unknown): Record<string, unknown>[] => {
   if (!payload) {
     return [];
@@ -10,8 +13,8 @@ const extractPlacesArray = (payload: unknown): Record<string, unknown>[] => {
       unknown
     >[];
   }
-  if (typeof payload === "object") {
-    const record = payload as Record<string, unknown>;
+  if (isRecord(payload)) {
+    const record = payload;
     const listCandidates =
       record.results ?? record.places ?? record.candidates ?? record.items ?? record.data;
     if (Array.isArray(listCandidates)) {
@@ -19,6 +22,11 @@ const extractPlacesArray = (payload: unknown): Record<string, unknown>[] => {
         string,
         unknown
       >[];
+    }
+    if (isRecord(record.data) && Array.isArray(record.data.places)) {
+      return record.data.places.filter(
+        (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object",
+      );
     }
     if (record.result && typeof record.result === "object") {
       return extractPlacesArray(record.result);
@@ -68,8 +76,14 @@ const extractPlacesFromText = (text: string): Record<string, unknown>[] => {
 export const extractPlacesFromMcpResult = (result: unknown): {
   places: Record<string, unknown>[];
   contentText?: string;
+  successfull?: boolean;
+  error?: string;
 } => {
   const { payload, contentText } = resolveMcpPayloadFromResult(result);
+  const record = isRecord(payload) ? payload : undefined;
+  const successfull =
+    typeof record?.successfull === "boolean" ? record.successfull : undefined;
+  const error = typeof record?.error === "string" ? record.error : undefined;
   let places = extractPlacesArray(payload);
 
   if (places.length === 0 && contentText) {
@@ -82,5 +96,9 @@ export const extractPlacesFromMcpResult = (result: unknown): {
     }
   }
 
-  return { places, contentText };
+  if (successfull === false) {
+    places = [];
+  }
+
+  return { places, contentText, successfull, error };
 };

@@ -128,7 +128,7 @@ const getLastSearch = async (
 const setLastSearch = async (
   context: AgentToolContext,
   state: LastSearchState,
-): void => {
+): Promise<void> => {
   if (!context.sessionId) {
     return;
   }
@@ -570,7 +570,8 @@ const nearbySearch = async (
   }
 
   const parsed = parseQuery(args.query);
-  const fallbackKeyword = parsed.keyword ?? args.query;
+  const lastSearch = args.query.trim() ? null : await getLastSearch(context);
+  const fallbackKeyword = parsed.keyword ?? lastSearch?.keyword ?? args.query;
   const fallbackRadius = clampRadiusMeters(
     args.radius_m ?? context.radius_m ?? parsed.radiusMeters,
   );
@@ -838,8 +839,9 @@ const recommendInternal = async (
             );
           }
 
-          const placesCandidate =
-            isRecord(parsed) && isRecord(parsed.data) ? parsed.data.places : undefined;
+          const placesCandidate = isRecord(parsedRecord?.data)
+            ? parsedRecord?.data.places
+            : undefined;
           const nextPageTokenParsed = getNextPageToken(parsed ?? payload);
           const failureMessage = "Couldn't fetch nearby places. Please try again.";
           if (successfull === false || !Array.isArray(placesCandidate)) {

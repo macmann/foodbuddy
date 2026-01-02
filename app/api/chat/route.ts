@@ -482,7 +482,7 @@ const fetchMoreFromMcp = async ({
     lat: number;
     lng: number;
     radius: number;
-    nextPageToken: string;
+    nextPageToken?: string | null;
   };
   requestId: string;
 }) => {
@@ -491,7 +491,7 @@ const fetchMoreFromMcp = async ({
   if (!mcpUrl) {
     return {
       places: [],
-      nextPageToken: session.nextPageToken,
+      nextPageToken: session.nextPageToken ?? undefined,
       message: "No more results yet — try a new search.",
       usedRadius: session.radius,
     };
@@ -507,7 +507,7 @@ const fetchMoreFromMcp = async ({
   if (!selectedTool) {
     return {
       places: [],
-      nextPageToken: session.nextPageToken,
+      nextPageToken: session.nextPageToken ?? undefined,
       message: "No more results yet — try a new search.",
       usedRadius: session.radius,
     };
@@ -525,10 +525,12 @@ const fetchMoreFromMcp = async ({
   const supportsMaxResultCount = Boolean(
     matchSchemaKey(selectedTool.inputSchema, ["maxresultcount", "maxresults", "limit"]),
   );
-  const radiusMultiplier = supportsNextPageToken ? 1 : 1.5;
+  const hasNextPageToken = Boolean(session.nextPageToken);
+  const radiusMultiplier = supportsNextPageToken && hasNextPageToken ? 1 : 1.5;
   const radiusMeters = Math.round(session.radius * radiusMultiplier);
   const maxResultCount = supportsMaxResultCount ? 30 : undefined;
-  const nextPageToken = supportsNextPageToken ? session.nextPageToken : undefined;
+  const nextPageToken =
+    supportsNextPageToken && session.nextPageToken ? session.nextPageToken : undefined;
 
   const callTool = async (tool: ToolDefinition, toolArgs: Record<string, unknown>) => {
     return mcpCall<unknown>({
@@ -566,19 +568,29 @@ const fetchMoreFromMcp = async ({
   }
 
   const { payload: parsedPayload } = resolveMcpPayloadFromResult(payload);
-  const { places } = extractPlacesFromMcpResult(payload);
+  const { places, successfull, error } = extractPlacesFromMcpResult(payload);
+  if (successfull === false) {
+    logger.warn(
+      { requestId, provider: "MCP", errorMessage: error },
+      "MCP follow-up search failed",
+    );
+  }
   const normalized = places
     .map((place) => normalizeMcpPlace(place, { lat: session.lat, lng: session.lng }))
     .filter((place): place is RecommendationCardData => Boolean(place));
   const updatedNextPageToken = getNextPageToken(parsedPayload ?? payload);
 
+  const message =
+    successfull === false
+      ? "Couldn't fetch nearby places. Please try again."
+      : normalized.length > 0
+        ? "Here are more places you might like."
+        : "No more results yet — try a new search.";
+
   return {
     places: normalized,
     nextPageToken: updatedNextPageToken,
-    message:
-      normalized.length > 0
-        ? "Here are more places you might like."
-        : "No more results yet — try a new search.",
+    message,
     usedRadius: radiusMeters,
   };
 };
@@ -771,7 +783,7 @@ export async function POST(request: Request) {
 
   if (isFollowUpRequest(body)) {
     const storedSession = body.sessionId ? await loadSearchSession(body.sessionId) : null;
-    if (!storedSession || !storedSession.nextPageToken) {
+    if (!storedSession) {
       return respondChat(
         200,
         buildChatResponse({
@@ -1034,7 +1046,7 @@ export async function POST(request: Request) {
       "Routing chat to internal recommendations",
     );
   } catch (err) {
-    logger.error(
+    logger.warn(
       {
         err,
         ...logContext,
