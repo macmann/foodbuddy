@@ -11,6 +11,16 @@ import { haversineMeters } from "../../../lib/reco/scoring";
 import { getLLMSettings } from "../../../lib/settings/llm";
 import { isAllowedModel } from "../../../lib/agent/model";
 import { loadSearchSession, upsertSearchSession } from "../../../lib/searchSession";
+import {
+  PENDING_ACTION_RECOMMEND,
+  resolveRecommendDecision,
+} from "../../../lib/chat/recommendState";
+import {
+  clearPending,
+  getOrCreateSession,
+  setLastLocation,
+  setPending,
+} from "../../../lib/session/searchSession";
 import { listMcpTools, mcpCall } from "../../../lib/mcp/client";
 import { extractPlacesFromMcpResult } from "../../../lib/mcp/placesExtractor";
 import { resolveMcpPayloadFromResult } from "../../../lib/mcp/resultParser";
@@ -26,6 +36,8 @@ export const dynamic = "force-dynamic";
 
 const defaultTimeoutMs = 12_000;
 const extendedTimeoutMs = 25_000;
+const locationPromptMessage =
+  "Share GPS or type area/city (e.g., Yangon, Hlaing, Mandalay).";
 
 type ChatRequestBody = {
   anonId: string;
@@ -86,6 +98,32 @@ const coerceString = (value: unknown): string | undefined => {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+};
+
+const pickFirstString = (...values: Array<unknown | undefined>) => {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return undefined;
+};
+
+const extractLatLng = (payload: unknown): { lat?: number; lng?: number } => {
+  if (!isRecord(payload)) {
+    return {};
+  }
+  const record = payload;
+  const lat = coerceNumber(record.lat ?? record.latitude ?? record.y);
+  const lng = coerceNumber(record.lng ?? record.lon ?? record.longitude ?? record.x);
+  if (lat !== undefined && lng !== undefined) {
+    return { lat, lng };
+  }
+  const location = record.location ?? record.geometry;
+  if (isRecord(location)) {
+    return extractLatLng(location);
+  }
+  return {};
 };
 
 const sanitizeAttempts = (raw: unknown): Attempt[] | undefined => {
@@ -472,6 +510,161 @@ const buildTextSearchArgs = (
   return args;
 };
 
+const buildGeocodeArgs = (tool: ToolDefinition, locationText: string) => {
+  const schema = tool.inputSchema;
+  const addressKey =
+    matchSchemaKey(schema, ["address_query"]) ??
+    matchSchemaKey(schema, ["address", "query", "text", "input"]) ??
+    "address_query";
+  return { [addressKey]: locationText };
+};
+
+const geocodeLocationText = async ({
+  locationText,
+  requestId,
+}: {
+  locationText: string;
+  requestId: string;
+}) => {
+  const mcpUrl = (process.env.COMPOSIO_MCP_URL ?? "").trim().replace(/^"+|"+$/g, "");
+  const composioApiKey = process.env.COMPOSIO_API_KEY ?? "";
+  if (!mcpUrl) {
+    return { coords: null, formattedAddress: null, error: "Missing MCP URL." };
+  }
+
+  const tools = await listMcpTools({
+    url: mcpUrl,
+    apiKey: composioApiKey,
+    requestId,
+  });
+  const resolved = resolveMcpTools(tools);
+  const directTool = tools.find(
+    (tool) => tool.name.toLowerCase() === "google_maps_geocode_address_with_query",
+  );
+  const geocodeTool = directTool ?? resolved.geocode;
+  if (!geocodeTool) {
+    return { coords: null, formattedAddress: null, error: "No geocode tool found." };
+  }
+
+  const geocodePayload = await mcpCall<unknown>({
+    url: mcpUrl,
+    apiKey: composioApiKey,
+    method: "tools/call",
+    params: { name: geocodeTool.name, arguments: buildGeocodeArgs(geocodeTool, locationText) },
+    requestId,
+  });
+  const { payload } = resolveMcpPayloadFromResult(geocodePayload);
+  const coords = extractLatLng(payload ?? {});
+  const formattedAddress =
+    pickFirstString(
+      (payload as { formatted_address?: string })?.formatted_address,
+      (payload as { formattedAddress?: string })?.formattedAddress,
+      (payload as { address?: string })?.address,
+    ) ?? null;
+
+  if (coords.lat === undefined || coords.lng === undefined) {
+    return { coords: null, formattedAddress, error: "No coordinates returned." };
+  }
+
+  return { coords: { lat: coords.lat, lng: coords.lng }, formattedAddress, error: null };
+};
+
+const searchPlacesWithMcp = async ({
+  keyword,
+  coords,
+  radiusMeters,
+  requestId,
+  locationText,
+}: {
+  keyword: string;
+  coords: { lat: number; lng: number };
+  radiusMeters: number;
+  requestId: string;
+  locationText?: string;
+}) => {
+  const mcpUrl = (process.env.COMPOSIO_MCP_URL ?? "").trim().replace(/^"+|"+$/g, "");
+  const composioApiKey = process.env.COMPOSIO_API_KEY ?? "";
+  if (!mcpUrl) {
+    return {
+      places: [],
+      message: "Places search is temporarily unavailable.",
+      nextPageToken: undefined,
+    };
+  }
+
+  const tools = await listMcpTools({
+    url: mcpUrl,
+    apiKey: composioApiKey,
+    requestId,
+  });
+  const resolvedTools = resolveMcpTools(tools);
+  const selectedTool = selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
+  if (!selectedTool) {
+    return {
+      places: [],
+      message: "Places search is temporarily unavailable.",
+      nextPageToken: undefined,
+    };
+  }
+
+  const queryBase = keyword.trim().length > 0 ? keyword.trim() : "restaurants";
+  const textQuery = locationText
+    ? `${queryBase} near ${locationText}`
+    : `${queryBase} near (${coords.lat},${coords.lng})`;
+
+  const payload =
+    selectedTool.name === resolvedTools.textSearch?.name
+      ? await mcpCall<unknown>({
+          url: mcpUrl,
+          apiKey: composioApiKey,
+          method: "tools/call",
+          params: {
+            name: selectedTool.name,
+            arguments: buildTextSearchArgs(selectedTool, {
+              query: textQuery,
+              location: coords,
+            }),
+          },
+          requestId,
+        })
+      : await mcpCall<unknown>({
+          url: mcpUrl,
+          apiKey: composioApiKey,
+          method: "tools/call",
+          params: {
+            name: selectedTool.name,
+            arguments: buildNearbySearchArgs(selectedTool, {
+              lat: coords.lat,
+              lng: coords.lng,
+              radiusMeters,
+              keyword: queryBase,
+            }),
+          },
+          requestId,
+        });
+
+  const { payload: parsedPayload } = resolveMcpPayloadFromResult(payload);
+  const { places, successfull, error } = extractPlacesFromMcpResult(payload);
+  if (successfull === false) {
+    logger.warn({ requestId, error }, "MCP place search failed");
+  }
+  const normalized = places
+    .map((place) => normalizeMcpPlace(place, coords))
+    .filter((place): place is RecommendationCardData => Boolean(place));
+  const nextPageToken = getNextPageToken(parsedPayload ?? payload);
+
+  const message =
+    normalized.length > 0
+      ? "Here are a few places you might like."
+      : "Sorry, I couldn't find any places for that query.";
+
+  return {
+    places: normalized,
+    message,
+    nextPageToken,
+  };
+};
+
 const fetchMoreFromMcp = async ({
   session,
   requestId,
@@ -759,14 +952,6 @@ export async function POST(request: Request) {
     "Incoming chat request",
   );
 
-  if (locationEnabled && !coords) {
-    return respondError(
-      400,
-      "Please share your location or set a neighborhood.",
-      sessionId,
-    );
-  }
-
   const limiter = rateLimit(`chat:${userIdHash}`, 10, 60_000);
   if (!limiter.allowed) {
     const response = respondError(
@@ -783,7 +968,13 @@ export async function POST(request: Request) {
 
   if (isFollowUpRequest(body)) {
     const storedSession = body.sessionId ? await loadSearchSession(body.sessionId) : null;
-    if (!storedSession) {
+    if (
+      !storedSession ||
+      storedSession.lastLat === null ||
+      storedSession.lastLng === null ||
+      !storedSession.lastQuery ||
+      storedSession.lastRadiusM === null
+    ) {
       return respondChat(
         200,
         buildChatResponse({
@@ -797,22 +988,22 @@ export async function POST(request: Request) {
 
     const followUp = await fetchMoreFromMcp({
       session: {
-        id: storedSession.id,
+        id: storedSession.sessionId,
         lastQuery: storedSession.lastQuery,
-        lat: storedSession.lat,
-        lng: storedSession.lng,
-        radius: storedSession.radius,
+        lat: storedSession.lastLat,
+        lng: storedSession.lastLng,
+        radius: storedSession.lastRadiusM,
         nextPageToken: storedSession.nextPageToken,
       },
       requestId,
     });
 
     await upsertSearchSession({
-      id: storedSession.id,
+      sessionId: storedSession.sessionId,
       lastQuery: storedSession.lastQuery,
-      lat: storedSession.lat,
-      lng: storedSession.lng,
-      radius: followUp.usedRadius ?? storedSession.radius,
+      lastLat: storedSession.lastLat,
+      lastLng: storedSession.lastLng,
+      lastRadiusM: followUp.usedRadius ?? storedSession.lastRadiusM,
       nextPageToken: followUp.nextPageToken ?? null,
     });
 
@@ -822,8 +1013,134 @@ export async function POST(request: Request) {
         status: "ok",
         message: followUp.message,
         places: followUp.places,
-        sessionId: storedSession.id,
+        sessionId: storedSession.sessionId,
         nextPageToken: followUp.nextPageToken,
+      }),
+    );
+  }
+
+  const searchSession = await getOrCreateSession({ sessionId, channel });
+  const decision = resolveRecommendDecision({
+    message: body.message,
+    action: body.action,
+    coords: coords ?? undefined,
+    locationText,
+    radiusM: radiusMeters,
+    session: searchSession ?? undefined,
+  });
+
+  if (decision) {
+    if (decision.action === "ask_location") {
+      await setPending(sessionId, {
+        action: PENDING_ACTION_RECOMMEND,
+        keyword: decision.keyword,
+      });
+      return respondChat(
+        200,
+        buildChatResponse({
+          status: "ok",
+          message: locationPromptMessage,
+          places: [],
+          sessionId,
+        }),
+      );
+    }
+
+    if (decision.action === "geocode") {
+      await setPending(sessionId, {
+        action: PENDING_ACTION_RECOMMEND,
+        keyword: decision.keyword,
+      });
+      const geocodeResult = await geocodeLocationText({
+        locationText: decision.locationText,
+        requestId,
+      });
+      if (!geocodeResult.coords) {
+        return respondChat(
+          200,
+          buildChatResponse({
+            status: "ok",
+            message: `I couldn't find that location. ${locationPromptMessage}`,
+            places: [],
+            sessionId,
+          }),
+        );
+      }
+
+      const resolvedLocationLabel =
+        geocodeResult.formattedAddress ?? decision.locationText;
+
+      await setLastLocation(sessionId, {
+        lat: geocodeResult.coords.lat,
+        lng: geocodeResult.coords.lng,
+        radiusM: radiusMeters,
+      });
+      await clearPending(sessionId);
+
+      const searchResult = await searchPlacesWithMcp({
+        keyword: decision.keyword,
+        coords: geocodeResult.coords,
+        radiusMeters,
+        requestId,
+        locationText: resolvedLocationLabel,
+      });
+
+      await upsertSearchSession({
+        sessionId,
+        channel,
+        lastQuery: decision.keyword,
+        lastLat: geocodeResult.coords.lat,
+        lastLng: geocodeResult.coords.lng,
+        lastRadiusM: radiusMeters,
+        nextPageToken: searchResult.nextPageToken ?? null,
+      });
+
+      const confirmMessage = `Got it — searching near ${resolvedLocationLabel}…`;
+      return respondChat(
+        200,
+        buildChatResponse({
+          status: "ok",
+          message: `${confirmMessage} ${searchResult.message}`,
+          places: searchResult.places,
+          sessionId,
+          nextPageToken: searchResult.nextPageToken,
+        }),
+      );
+    }
+
+    const searchCoords = decision.coords;
+    await clearPending(sessionId);
+    await setLastLocation(sessionId, {
+      lat: searchCoords.lat,
+      lng: searchCoords.lng,
+      radiusM: decision.radiusM,
+    });
+
+    const searchResult = await searchPlacesWithMcp({
+      keyword: decision.keyword,
+      coords: searchCoords,
+      radiusMeters: decision.radiusM,
+      requestId,
+    });
+
+    await upsertSearchSession({
+      sessionId,
+      channel,
+      lastQuery: decision.keyword,
+      lastLat: searchCoords.lat,
+      lastLng: searchCoords.lng,
+      lastRadiusM: decision.radiusM,
+      nextPageToken: searchResult.nextPageToken ?? null,
+    });
+
+    return respondChat(
+      200,
+      buildChatResponse({
+        status: "ok",
+        message: searchResult.message,
+        places: searchResult.places,
+        sessionId,
+        nextPageToken: searchResult.nextPageToken,
       }),
     );
   }
@@ -1009,11 +1326,11 @@ export async function POST(request: Request) {
         if (coords) {
           const existingSession = await loadSearchSession(sessionId);
           await upsertSearchSession({
-            id: sessionId,
+            sessionId,
             lastQuery: body.message,
-            lat: coords.lat,
-            lng: coords.lng,
-            radius: radiusMeters,
+            lastLat: coords.lat,
+            lastLng: coords.lng,
+            lastRadiusM: radiusMeters,
             nextPageToken: existingSession?.nextPageToken ?? null,
           });
         }
@@ -1178,11 +1495,11 @@ export async function POST(request: Request) {
     }
 
     await upsertSearchSession({
-      id: sessionId,
+      sessionId,
       lastQuery: body.message,
-      lat: coords.lat,
-      lng: coords.lng,
-      radius: radiusMeters,
+      lastLat: coords.lat,
+      lastLng: coords.lng,
+      lastRadiusM: radiusMeters,
       nextPageToken: null,
     });
 

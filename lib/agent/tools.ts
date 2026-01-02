@@ -114,12 +114,15 @@ const getLastSearch = async (
   if (!stored) {
     return null;
   }
+  if (stored.lastLat === null || stored.lastLng === null || !stored.lastQuery) {
+    return null;
+  }
   const hydrated = {
     keyword: stored.lastQuery,
-    radiusMeters: stored.radius,
+    radiusMeters: stored.lastRadiusM ?? DEFAULT_RADIUS_METERS,
     nextPageToken: stored.nextPageToken ?? undefined,
-    lat: stored.lat,
-    lng: stored.lng,
+    lat: stored.lastLat,
+    lng: stored.lastLng,
   };
   lastSearchBySession.set(context.sessionId, hydrated);
   return hydrated;
@@ -134,11 +137,11 @@ const setLastSearch = async (
   }
   lastSearchBySession.set(context.sessionId, state);
   await upsertSearchSession({
-    id: context.sessionId,
+    sessionId: context.sessionId,
     lastQuery: state.keyword,
-    lat: state.lat,
-    lng: state.lng,
-    radius: state.radiusMeters,
+    lastLat: state.lat,
+    lastLng: state.lng,
+    lastRadiusM: state.radiusMeters,
     nextPageToken: state.nextPageToken ?? null,
   });
 };
