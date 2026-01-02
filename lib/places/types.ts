@@ -37,6 +37,7 @@ export type TextSearchParams = {
   lat: number;
   lng: number;
   query: string;
+  radiusMeters?: number;
   requestId?: string;
 };
 
