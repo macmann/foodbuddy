@@ -24,6 +24,9 @@ import type {
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
+const defaultTimeoutMs = 12_000;
+const extendedTimeoutMs = 25_000;
+
 type ChatRequestBody = {
   anonId: string;
   sessionId?: string;
@@ -240,6 +243,11 @@ const sanitizeMessage = (message: string | null | undefined, fallback: string) =
   }
   return trimmed;
 };
+
+const followUpIntentRegex = /show more|more options|next|another|refine/i;
+
+const isFollowUpIntent = (body: ChatRequestBody) =>
+  followUpIntentRegex.test(body.message);
 
 const isFollowUpRequest = (body: ChatRequestBody) => {
   const normalized = body.message.trim().toLowerCase();
@@ -689,6 +697,7 @@ export async function POST(request: Request) {
   }
 
   const sessionId = body.sessionId ?? randomUUID();
+  const timeoutMs = isFollowUpIntent(body) ? extendedTimeoutMs : defaultTimeoutMs;
 
   if (body.message.length > 500) {
     return respondError(400, "Message too long.", sessionId);
@@ -733,6 +742,7 @@ export async function POST(request: Request) {
       radius_m,
       radius_defaulted: radius_defaulted || undefined,
       locationEnabled,
+      timeoutMs,
     },
     "Incoming chat request",
   );
@@ -872,12 +882,20 @@ export async function POST(request: Request) {
       }
 
       logger.info(
-        { ...logContext, path: "llm_agent", agentEnabled, llmModel, hasSystemPrompt, reason },
+        {
+          ...logContext,
+          path: "llm_agent",
+          agentEnabled,
+          llmModel,
+          hasSystemPrompt,
+          reason,
+          timeoutMs,
+        },
         "Routing chat to agent",
       );
       const agentStart = Date.now();
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 25_000);
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
       let agentResult: Awaited<ReturnType<typeof runFoodBuddyAgent>> | null = null;
       try {
         agentResult = await runFoodBuddyAgent({
@@ -898,7 +916,10 @@ export async function POST(request: Request) {
         if (isAbortError(err)) {
           llmTimedOut = true;
           reason = "llm_timeout";
-          logger.info({ ...logContext, reason, requestId }, "LLM request timed out");
+          logger.info(
+            { ...logContext, reason, requestId, timeoutMs },
+            "LLM request timed out",
+          );
         } else {
           throw err;
         }
@@ -1152,6 +1173,18 @@ export async function POST(request: Request) {
       radius: radiusMeters,
       nextPageToken: null,
     });
+
+    if (llmTimedOut) {
+      logger.warn(
+        {
+          ...logContext,
+          fallbackSucceeded: true,
+          finalOutcome: "fallback_ok",
+          timeoutMs,
+        },
+        "LLM timed out; fallback recommendations succeeded",
+      );
+    }
 
     return respondChat(
       200,

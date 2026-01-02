@@ -32,6 +32,7 @@ type NearbySearchArgs = {
 type RecommendInternalArgs = {
   query: string;
   location?: string;
+  maxResultCount?: number;
 };
 
 type GeocodeArgs = {
@@ -44,6 +45,7 @@ type ToolHandler = (
 ) => Promise<Record<string, unknown>>;
 
 const MAX_RECOMMENDATIONS = 3;
+const DEFAULT_MAX_RESULT_COUNT = 10;
 const MIN_RADIUS_METERS = 500;
 const MAX_RADIUS_METERS = 10_000;
 const DEFAULT_RADIUS_METERS = 1500;
@@ -270,6 +272,9 @@ const parseRecommendArgs = (args: Record<string, unknown>): RecommendInternalArg
   return {
     query: typeof args.query === "string" ? args.query : "",
     location: typeof args.location === "string" ? args.location : undefined,
+    maxResultCount: toNumber(
+      args.maxResultCount ?? args.max_result_count ?? args.limit ?? args.maxResults,
+    ),
   };
 };
 
@@ -377,9 +382,10 @@ const buildNearbySearchArgs = (
     lng: number;
     radiusMeters: number;
     keyword?: string;
-  excludedTypes?: string[] | string;
-  nextPageToken?: string;
-},
+    excludedTypes?: string[] | string;
+    nextPageToken?: string;
+    maxResultCount?: number;
+  },
 ): { args: Record<string, unknown>; logKeys: string[]; keywordOmitted: boolean } => {
   const schema = tool.inputSchema;
   const args: Record<string, unknown> = {};
@@ -406,6 +412,7 @@ const buildNearbySearchArgs = (
     "page_token",
     "pageToken",
   ]);
+  const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
 
   if (hasSchemaProperty(schema, "location") && (!latKey || !lngKey)) {
     args.location = { lat: params.lat, lng: params.lng };
@@ -465,6 +472,10 @@ const buildNearbySearchArgs = (
     logKeys.add("pageToken");
   }
 
+  if (maxResultsKey && params.maxResultCount) {
+    args[maxResultsKey] = params.maxResultCount;
+  }
+
   return { args, logKeys: Array.from(logKeys), keywordOmitted };
 };
 
@@ -481,6 +492,7 @@ const buildTextSearchArgs = (
     locationText?: string;
     location?: { lat: number; lng: number };
     nextPageToken?: string;
+    maxResultCount?: number;
   },
 ): Record<string, unknown> => {
   const schema = tool.inputSchema;
@@ -496,6 +508,7 @@ const buildTextSearchArgs = (
     "page_token",
     "pageToken",
   ]);
+  const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
 
   const queryValue = params.locationText
     ? `${params.query} in ${params.locationText}`
@@ -522,6 +535,10 @@ const buildTextSearchArgs = (
 
   if (nextPageTokenKey && params.nextPageToken) {
     args[nextPageTokenKey] = params.nextPageToken;
+  }
+
+  if (maxResultsKey && params.maxResultCount) {
+    args[maxResultsKey] = params.maxResultCount;
   }
 
   return args;
@@ -633,8 +650,16 @@ const recommendInternal = async (
   context: AgentToolContext,
 ): Promise<Record<string, unknown>> => {
   try {
-    const parsed = parseQuery(args.query);
-    const fallbackKeyword = parsed.keyword ?? args.query;
+    const rawQuery = args.query.trim();
+    const lastSearch = rawQuery ? null : await getLastSearch(context);
+    const resolvedQuery = rawQuery || lastSearch?.keyword || "";
+    const parsed = parseQuery(resolvedQuery);
+    const fallbackKeyword = parsed.keyword ?? resolvedQuery;
+    const requestedMaxResultCount =
+      args.maxResultCount && args.maxResultCount > 0
+        ? Math.round(args.maxResultCount)
+        : undefined;
+    const maxResultCount = requestedMaxResultCount ?? DEFAULT_MAX_RESULT_COUNT;
     const fallbackRadius = clampRadiusMeters(context.radius_m ?? parsed.radiusMeters);
     const paginationOverride = await resolvePaginationOverride(context, {
       keyword: fallbackKeyword,
@@ -844,7 +869,7 @@ const recommendInternal = async (
             "MCP places parsed",
           );
 
-          const limit = 20;
+          const limit = maxResultCount;
           if (mappedPlaces.length > limit) {
             logger.info(
               {
@@ -956,6 +981,7 @@ const recommendInternal = async (
                     locationText,
                     location: locationCoords,
                     nextPageToken: supportsNextPageToken ? nextPageToken : undefined,
+                    maxResultCount,
                   }),
                 );
               } else {
@@ -967,6 +993,7 @@ const recommendInternal = async (
                     radiusMeters,
                     keyword,
                     nextPageToken: supportsNextPageToken ? nextPageToken : undefined,
+                    maxResultCount,
                   },
                 );
                 if (keywordOmitted) {
