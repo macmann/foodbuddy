@@ -12,6 +12,11 @@ import { getLLMSettings } from "../../../lib/settings/llm";
 import { isAllowedModel } from "../../../lib/agent/model";
 import { loadSearchSession, upsertSearchSession } from "../../../lib/searchSession";
 import {
+  FOOD_PLACE_TYPE_FILTER,
+  buildFoodSearchQuery,
+  filterFoodPlaces,
+} from "../../../lib/places/foodFilter";
+import {
   PENDING_ACTION_RECOMMEND,
   resolveRecommendDecision,
 } from "../../../lib/chat/recommendState";
@@ -37,7 +42,7 @@ export const dynamic = "force-dynamic";
 const defaultTimeoutMs = 12_000;
 const extendedTimeoutMs = 25_000;
 const locationPromptMessage =
-  "Share GPS or type area/city (e.g., Yangon, Hlaing, Mandalay).";
+  "Please share your GPS location or type your area/city (e.g., 'Hlaing, Yangon'). What area are you in?";
 
 type ChatRequestBody = {
   anonId: string;
@@ -437,6 +442,12 @@ const buildNearbySearchArgs = (
     "pageToken",
   ]);
   const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
+  const fieldMaskKey = matchSchemaKey(schema, ["fieldmask", "field_mask", "fields"]);
+  const includedTypesKey = matchSchemaKey(schema, [
+    "includedtypes",
+    "included_types",
+    "includetypes",
+  ]);
 
   if (hasSchemaProperty(schema, "location") && (!latKey || !lngKey)) {
     args.location = { lat: params.lat, lng: params.lng };
@@ -461,12 +472,21 @@ const buildNearbySearchArgs = (
     args[keywordKey] = keywordValue;
   }
 
+  if (includedTypesKey && !args[includedTypesKey]) {
+    args[includedTypesKey] = FOOD_PLACE_TYPE_FILTER;
+  }
+
   if (nextPageTokenKey && params.nextPageToken) {
     args[nextPageTokenKey] = params.nextPageToken;
   }
 
   if (maxResultsKey && params.maxResultCount) {
     args[maxResultsKey] = params.maxResultCount;
+  }
+
+  if (fieldMaskKey) {
+    args[fieldMaskKey] =
+      "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.googleMapsUri,places.types,places.primaryType,places.primaryTypeDisplayName,places.businessStatus";
   }
 
   return args;
@@ -476,6 +496,7 @@ const buildTextSearchArgs = (
   tool: ToolDefinition,
   params: {
     query: string;
+    locationText?: string;
     location?: { lat: number; lng: number };
     nextPageToken?: string;
     maxResultCount?: number;
@@ -485,9 +506,16 @@ const buildTextSearchArgs = (
   const schema = tool.inputSchema;
   const args: Record<string, unknown> = {};
   const queryKey = matchSchemaKey(schema, ["query", "text", "input", "search"]);
+  const locationKey = matchSchemaKey(schema, ["location", "near", "bias"]);
   const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
   const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
   const locationBiasKey = matchSchemaKey(schema, ["locationbias", "location_bias"]);
+  const rankPreferenceKey = matchSchemaKey(schema, [
+    "rankpreference",
+    "rank_preference",
+    "rankby",
+    "rank_by",
+  ]);
   const nextPageTokenKey = matchSchemaKey(schema, [
     "nextpagetoken",
     "next_page_token",
@@ -498,10 +526,23 @@ const buildTextSearchArgs = (
   const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
   const fieldMaskKey = matchSchemaKey(schema, ["fieldmask", "field_mask", "fields"]);
 
+  const supportsLocationBias =
+    Boolean(locationBiasKey) ||
+    Boolean(latKey) ||
+    Boolean(lngKey) ||
+    hasSchemaProperty(schema, "location");
+  let queryValue = params.query;
+  if (params.locationText) {
+    queryValue = `${queryValue} in ${params.locationText}`;
+  }
+  if (params.location && !supportsLocationBias) {
+    queryValue = `${queryValue} near ${params.location.lat},${params.location.lng}`;
+  }
+
   if (queryKey) {
-    args[queryKey] = params.query;
+    args[queryKey] = queryValue;
   } else {
-    args.query = params.query;
+    args.query = queryValue;
   }
 
   if (params.location && (latKey || lngKey)) {
@@ -513,6 +554,8 @@ const buildTextSearchArgs = (
     }
   } else if (params.location && hasSchemaProperty(schema, "location")) {
     args.location = { lat: params.location.lat, lng: params.location.lng };
+  } else if (locationKey && params.locationText) {
+    args[locationKey] = params.locationText;
   }
 
   if (params.location && typeof params.radiusMeters === "number" && locationBiasKey) {
@@ -527,6 +570,12 @@ const buildTextSearchArgs = (
     };
   }
 
+  if (rankPreferenceKey) {
+    args[rankPreferenceKey] = rankPreferenceKey.toLowerCase().includes("rankby")
+      ? "distance"
+      : "DISTANCE";
+  }
+
   if (nextPageTokenKey && params.nextPageToken) {
     args[nextPageTokenKey] = params.nextPageToken;
   }
@@ -537,7 +586,7 @@ const buildTextSearchArgs = (
 
   if (fieldMaskKey) {
     args[fieldMaskKey] =
-      "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.googleMapsUri";
+      "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.googleMapsUri,places.types,places.primaryType,places.primaryTypeDisplayName,places.businessStatus";
   }
 
   return args;
@@ -602,6 +651,23 @@ const geocodeLocationText = async ({
   return { coords: { lat: coords.lat, lng: coords.lng }, formattedAddress, error: null };
 };
 
+const selectMcpSearchTool = (
+  tools: ReturnType<typeof resolveMcpTools>,
+  keyword: string,
+): ToolDefinition | null => {
+  const trimmedKeyword = keyword.trim();
+  if (tools.nearbySearch) {
+    const nearbyKeywordKey = resolveKeywordSchemaKey(tools.nearbySearch.inputSchema);
+    if (nearbyKeywordKey || !trimmedKeyword) {
+      return tools.nearbySearch;
+    }
+  }
+  if (tools.textSearch) {
+    return tools.textSearch;
+  }
+  return tools.nearbySearch ?? null;
+};
+
 const searchPlacesWithMcp = async ({
   keyword,
   coords,
@@ -631,7 +697,10 @@ const searchPlacesWithMcp = async ({
     requestId,
   });
   const resolvedTools = resolveMcpTools(tools);
-  const selectedTool = selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
+  const normalizedKeyword = buildFoodSearchQuery(keyword);
+  const selectedTool =
+    selectMcpSearchTool(resolvedTools, normalizedKeyword) ??
+    selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
   if (!selectedTool) {
     return {
       places: [],
@@ -640,10 +709,8 @@ const searchPlacesWithMcp = async ({
     };
   }
 
-  const queryBase = keyword.trim().length > 0 ? keyword.trim() : "restaurants";
-  const textQuery = locationText
-    ? `${queryBase} near ${locationText}`
-    : `${queryBase} near (${coords.lat},${coords.lng})`;
+  const queryBase = normalizedKeyword.trim().length > 0 ? normalizedKeyword.trim() : "restaurants";
+  const textQuery = queryBase;
 
   const payload =
     selectedTool.name === resolvedTools.textSearch?.name
@@ -656,6 +723,8 @@ const searchPlacesWithMcp = async ({
             arguments: buildTextSearchArgs(selectedTool, {
               query: textQuery,
               location: coords,
+              radiusMeters,
+              locationText,
             }),
           },
           requestId,
@@ -681,7 +750,8 @@ const searchPlacesWithMcp = async ({
   if (successfull === false) {
     logger.warn({ requestId, error }, "MCP place search failed");
   }
-  const normalized = places
+  const filtered = filterFoodPlaces(places, queryBase);
+  const normalized = filtered
     .map((place) => normalizeMcpPlace(place, coords))
     .filter((place): place is RecommendationCardData => Boolean(place));
   const nextPageToken = getNextPageToken(parsedPayload ?? payload);
@@ -689,7 +759,7 @@ const searchPlacesWithMcp = async ({
   const message =
     normalized.length > 0
       ? "Here are a few places you might like."
-      : "Sorry, I couldn't find any places for that query.";
+      : "I couldn’t find food places for that. Try a different keyword (e.g., 'hotpot', 'noodle', 'dim sum').";
 
   return {
     places: normalized,
@@ -729,7 +799,10 @@ const fetchMoreFromMcp = async ({
     requestId,
   });
   const resolvedTools = resolveMcpTools(tools);
-  const selectedTool = selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
+  const normalizedQuery = buildFoodSearchQuery(session.lastQuery);
+  const selectedTool =
+    selectMcpSearchTool(resolvedTools, normalizedQuery) ??
+    selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
   if (!selectedTool) {
     return {
       places: [],
@@ -773,7 +846,7 @@ const fetchMoreFromMcp = async ({
     payload = await callTool(
       selectedTool,
       buildTextSearchArgs(selectedTool, {
-        query: session.lastQuery,
+        query: normalizedQuery,
         location: { lat: session.lat, lng: session.lng },
         radiusMeters,
         nextPageToken,
@@ -787,7 +860,7 @@ const fetchMoreFromMcp = async ({
         lat: session.lat,
         lng: session.lng,
         radiusMeters,
-        keyword: session.lastQuery,
+        keyword: normalizedQuery,
         nextPageToken,
         maxResultCount,
       }),
@@ -802,7 +875,8 @@ const fetchMoreFromMcp = async ({
       "MCP follow-up search failed",
     );
   }
-  const normalized = places
+  const filtered = filterFoodPlaces(places, normalizedQuery);
+  const normalized = filtered
     .map((place) => normalizeMcpPlace(place, { lat: session.lat, lng: session.lng }))
     .filter((place): place is RecommendationCardData => Boolean(place));
   const updatedNextPageToken = getNextPageToken(parsedPayload ?? payload);
@@ -812,7 +886,7 @@ const fetchMoreFromMcp = async ({
       ? "Couldn't fetch nearby places. Please try again."
       : normalized.length > 0
         ? "Here are more places you might like."
-        : "No more results yet — try a new search.";
+        : "I couldn’t find food places for that. Try a different keyword (e.g., 'hotpot', 'noodle', 'dim sum').";
 
   return {
     places: normalized,
@@ -1061,6 +1135,7 @@ export async function POST(request: Request) {
     locationText,
     radiusM: radiusMeters,
     session: searchSession ?? undefined,
+    allowSessionLocation: locationEnabled || Boolean(coords),
   });
 
   if (decision) {
@@ -1122,7 +1197,7 @@ export async function POST(request: Request) {
       await upsertSearchSession({
         sessionId,
         channel,
-        lastQuery: decision.keyword,
+        lastQuery: buildFoodSearchQuery(decision.keyword),
         lastLat: geocodeResult.coords.lat,
         lastLng: geocodeResult.coords.lng,
         lastRadiusM: radiusMeters,
@@ -1160,7 +1235,7 @@ export async function POST(request: Request) {
     await upsertSearchSession({
       sessionId,
       channel,
-      lastQuery: decision.keyword,
+      lastQuery: buildFoodSearchQuery(decision.keyword),
       lastLat: searchCoords.lat,
       lastLng: searchCoords.lng,
       lastRadiusM: decision.radiusM,
@@ -1204,8 +1279,7 @@ export async function POST(request: Request) {
 
     if (reason === "agent_success") {
       if (geoLocation.kind === "none") {
-        const message =
-          "Tell me a neighborhood or enable location so I can find nearby places.";
+        const message = locationPromptMessage;
         await writeRecommendationEvent(
           {
             channel: "WEB",
@@ -1413,7 +1487,7 @@ export async function POST(request: Request) {
 
   if (!coords) {
     logger.info({ ...logContext, path: "fallback" }, "Missing location for chat");
-    const message = "Please share a location so I can find nearby places.";
+    const message = locationPromptMessage;
     const responseStatus = llmTimedOut ? "fallback" : "ERROR";
     await writeRecommendationEvent(
       {
