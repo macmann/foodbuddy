@@ -494,6 +494,7 @@ const buildTextSearchArgs = (
     query: string;
     locationText?: string;
     location?: { lat: number; lng: number };
+    radiusMeters?: number;
     nextPageToken?: string;
     maxResultCount?: number;
     radiusMeters?: number;
@@ -516,9 +517,17 @@ const buildTextSearchArgs = (
   const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
   const fieldMaskKey = matchSchemaKey(schema, ["fieldmask", "field_mask", "fields"]);
 
-  const queryValue = params.locationText
+  const supportsLocationBias =
+    Boolean(locationBiasKey) ||
+    Boolean(latKey) ||
+    Boolean(lngKey) ||
+    hasSchemaProperty(schema, "location");
+  let queryValue = params.locationText
     ? `${params.query} in ${params.locationText}`
     : params.query;
+  if (params.location && !supportsLocationBias) {
+    queryValue = `${queryValue} near ${params.location.lat},${params.location.lng}`;
+  }
 
   if (queryKey) {
     args[queryKey] = queryValue;
@@ -526,7 +535,21 @@ const buildTextSearchArgs = (
     args.query = queryValue;
   }
 
-  if (params.location && (latKey || lngKey)) {
+  if (params.location && locationBiasKey) {
+    const radiusValue =
+      typeof params.radiusMeters === "number" && Number.isFinite(params.radiusMeters)
+        ? params.radiusMeters
+        : undefined;
+    args[locationBiasKey] = {
+      circle: {
+        center: {
+          latitude: params.location.lat,
+          longitude: params.location.lng,
+        },
+        ...(radiusValue ? { radius: radiusValue } : {}),
+      },
+    };
+  } else if (params.location && (latKey || lngKey)) {
     if (latKey) {
       args[latKey] = params.location.lat;
     }

@@ -204,3 +204,103 @@ test("recommend_places sends keyword using textQuery schema key", async () => {
     process.env.COMPOSIO_API_KEY = originalApiKey;
   }
 });
+
+test("recommend_places biases text search toward provided coordinates", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalProvider = process.env.GOOGLE_PROVIDER;
+  const originalMcpUrl = process.env.COMPOSIO_MCP_URL;
+  const originalApiKey = process.env.COMPOSIO_API_KEY;
+
+  try {
+    process.env.GOOGLE_PROVIDER = "MCP";
+    process.env.COMPOSIO_MCP_URL = "https://example.com";
+    process.env.COMPOSIO_API_KEY = "test-api-key";
+
+    let capturedArgs: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (_input, init) => {
+      const body = init?.body ? JSON.parse(init.body.toString()) : null;
+
+      if (body.method === "tools/list") {
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: {
+              tools: [
+                {
+                  name: "google_maps_text_search",
+                  inputSchema: {
+                    properties: {
+                      textQuery: { type: "string" },
+                      locationBias: { type: "object" },
+                    },
+                  },
+                },
+              ],
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      capturedArgs = body?.params?.arguments ?? null;
+      const bias = capturedArgs?.locationBias as
+        | { circle?: { center?: { latitude?: number; longitude?: number } } }
+        | undefined;
+      const isMyanmarBias =
+        bias?.circle?.center?.latitude === 21 && bias?.circle?.center?.longitude === 96;
+
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: {
+            successfull: true,
+            data: {
+              places: [
+                {
+                  id: "mm-1",
+                  displayName: { text: "Noodle House" },
+                  formattedAddress: isMyanmarBias ? "Yangon, Myanmar" : "Seattle, USA",
+                  location: { latitude: 21, longitude: 96 },
+                },
+              ],
+            },
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as typeof fetch;
+
+    const result = await toolHandlers.recommend_places(
+      { query: "noodle" },
+      {
+        location: { kind: "coords", coords: { lat: 21, lng: 96 } },
+        radius_m: 1500,
+      },
+    );
+
+    const results = result.results as Array<{ address?: string; distanceMeters?: number }>;
+    const first = results?.[0];
+    const addressHasMyanmar = first?.address?.includes("Myanmar") ?? false;
+    const withinRadius =
+      typeof first?.distanceMeters === "number" ? first.distanceMeters <= 1500 : false;
+
+    assert.ok(capturedArgs?.locationBias);
+    assert.ok(first);
+    assert.ok(addressHasMyanmar || withinRadius);
+  } finally {
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+    process.env.GOOGLE_PROVIDER = originalProvider;
+    process.env.COMPOSIO_MCP_URL = originalMcpUrl;
+    process.env.COMPOSIO_API_KEY = originalApiKey;
+  }
+});
