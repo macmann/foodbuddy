@@ -24,10 +24,34 @@ const formatTime = (timestamp: number) =>
 
 export default function MessageBubble({ message, children, onRetry }: MessageBubbleProps) {
   const isUser = message.role === "user";
+  const rawContent = message.content ?? "";
+  const shouldParseJson =
+    !isUser &&
+    rawContent.trim().startsWith("{") &&
+    (rawContent.includes('"successfull"') || rawContent.includes('"logs"'));
+  let displayContent = rawContent;
+
+  if (shouldParseJson) {
+    try {
+      const parsed = JSON.parse(rawContent) as {
+        successfull?: boolean;
+        error?: string;
+      };
+
+      if (parsed.successfull === true) {
+        displayContent = "All set! Everything completed successfully.";
+      } else if (parsed.error || parsed.successfull === false) {
+        displayContent = "Sorry, something went wrong. Please try again.";
+      }
+    } catch {
+      // Fall back to raw content.
+    }
+  }
+
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm sm:text-base ${
+        className={`max-h-[70vh] max-w-[85%] overflow-auto rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm [overflow-wrap:anywhere] sm:text-base ${
           isUser
             ? "bg-slate-900 text-white"
             : message.error
@@ -35,7 +59,7 @@ export default function MessageBubble({ message, children, onRetry }: MessageBub
               : "bg-slate-100 text-slate-900"
         }`}
       >
-        {message.content && <p className="whitespace-pre-line">{message.content}</p>}
+        {displayContent && <p className="whitespace-pre-line">{displayContent}</p>}
         {children}
         {message.responseError && (
           <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
