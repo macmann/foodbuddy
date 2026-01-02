@@ -245,6 +245,8 @@ export class ComposioMcpProvider implements PlacesProvider {
               query: params.keyword ?? "restaurants",
               locationText: undefined,
               location: { lat: params.lat, lng: params.lng },
+              radiusMeters: params.radiusMeters,
+              maxResultCount: 20,
             });
       const result = await this.callTool(tool.name, args, requestId);
       const { places: rawPlaces } = extractPlacesFromMcpResult(result);
@@ -270,6 +272,8 @@ export class ComposioMcpProvider implements PlacesProvider {
               query: params.query,
               locationText: undefined,
               location: { lat: params.lat, lng: params.lng },
+              radiusMeters: params.radiusMeters,
+              maxResultCount: 20,
             })
           : this.buildNearbySearchArgs(tool, {
               lat: params.lat,
@@ -443,14 +447,19 @@ export class ComposioMcpProvider implements PlacesProvider {
       query: string;
       locationText?: string;
       location?: { lat: number; lng: number };
+      radiusMeters?: number;
+      maxResultCount?: number;
     },
   ): Record<string, unknown> {
     const schema = tool.inputSchema;
     const args: Record<string, unknown> = {};
     const queryKey = matchSchemaKey(schema, ["query", "text", "input", "search"]);
     const locationKey = matchSchemaKey(schema, ["location", "near", "bias"]);
+    const locationBiasKey = matchSchemaKey(schema, ["locationbias", "location_bias"]);
     const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
     const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
+    const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
+    const fieldMaskKey = matchSchemaKey(schema, ["fieldmask", "field_mask", "fields"]);
 
     const queryValue = params.locationText
       ? `${params.query} in ${params.locationText}`
@@ -473,6 +482,27 @@ export class ComposioMcpProvider implements PlacesProvider {
       args.location = { lat: params.location.lat, lng: params.location.lng };
     } else if (locationKey && params.locationText) {
       args[locationKey] = params.locationText;
+    }
+
+    if (params.location && typeof params.radiusMeters === "number" && locationBiasKey) {
+      args[locationBiasKey] = {
+        circle: {
+          center: {
+            latitude: params.location.lat,
+            longitude: params.location.lng,
+          },
+          radius: params.radiusMeters,
+        },
+      };
+    }
+
+    if (maxResultsKey && params.maxResultCount) {
+      args[maxResultsKey] = params.maxResultCount;
+    }
+
+    if (fieldMaskKey) {
+      args[fieldMaskKey] =
+        "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.googleMapsUri";
     }
 
     return args;

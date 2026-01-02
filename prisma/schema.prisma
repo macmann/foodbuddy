@@ -122,11 +122,16 @@ model LLMSettings {
 }
 
 model SearchSession {
-  id            String   @id
-  lastQuery     String
-  lat           Float
-  lng           Float
-  radius        Int
+  id            String   @id @default(cuid())
+  sessionId     String   @unique
+  channel       String?
+  pendingAction String?
+  pendingKeyword String?
+  lastLat       Float?
+  lastLng       Float?
+  lastRadiusM   Int?
+  lastQuery     String?
   nextPageToken String?
+  createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }

@@ -114,12 +114,15 @@ const getLastSearch = async (
   if (!stored) {
     return null;
   }
+  if (stored.lastLat === null || stored.lastLng === null || !stored.lastQuery) {
+    return null;
+  }
   const hydrated = {
     keyword: stored.lastQuery,
-    radiusMeters: stored.radius,
+    radiusMeters: stored.lastRadiusM ?? DEFAULT_RADIUS_METERS,
     nextPageToken: stored.nextPageToken ?? undefined,
-    lat: stored.lat,
-    lng: stored.lng,
+    lat: stored.lastLat,
+    lng: stored.lastLng,
   };
   lastSearchBySession.set(context.sessionId, hydrated);
   return hydrated;
@@ -134,11 +137,11 @@ const setLastSearch = async (
   }
   lastSearchBySession.set(context.sessionId, state);
   await upsertSearchSession({
-    id: context.sessionId,
+    sessionId: context.sessionId,
     lastQuery: state.keyword,
-    lat: state.lat,
-    lng: state.lng,
-    radius: state.radiusMeters,
+    lastLat: state.lat,
+    lastLng: state.lng,
+    lastRadiusM: state.radiusMeters,
     nextPageToken: state.nextPageToken ?? null,
   });
 };
@@ -494,23 +497,14 @@ const buildTextSearchArgs = (
     radiusMeters?: number;
     nextPageToken?: string;
     maxResultCount?: number;
+    radiusMeters?: number;
   },
 ): Record<string, unknown> => {
   const schema = tool.inputSchema;
   const args: Record<string, unknown> = {};
-  const queryKey = matchSchemaKey(schema, [
-    "textquery",
-    "query",
-    "text",
-    "input",
-    "search",
-  ]);
-  const locationBiasKey = matchSchemaKey(schema, [
-    "locationbias",
-    "location_bias",
-    "bias",
-  ]);
-  const locationKey = matchSchemaKey(schema, ["location", "near"]);
+  const queryKey = matchSchemaKey(schema, ["query", "text", "input", "search"]);
+  const locationKey = matchSchemaKey(schema, ["location", "near", "bias"]);
+  const locationBiasKey = matchSchemaKey(schema, ["locationbias", "location_bias"]);
   const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
   const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
   const nextPageTokenKey = matchSchemaKey(schema, [
@@ -521,6 +515,7 @@ const buildTextSearchArgs = (
     "pageToken",
   ]);
   const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
+  const fieldMaskKey = matchSchemaKey(schema, ["fieldmask", "field_mask", "fields"]);
 
   const supportsLocationBias =
     Boolean(locationBiasKey) ||
@@ -567,12 +562,29 @@ const buildTextSearchArgs = (
     args[locationKey] = params.locationText;
   }
 
+  if (params.location && typeof params.radiusMeters === "number" && locationBiasKey) {
+    args[locationBiasKey] = {
+      circle: {
+        center: {
+          latitude: params.location.lat,
+          longitude: params.location.lng,
+        },
+        radius: params.radiusMeters,
+      },
+    };
+  }
+
   if (nextPageTokenKey && params.nextPageToken) {
     args[nextPageTokenKey] = params.nextPageToken;
   }
 
   if (maxResultsKey && params.maxResultCount) {
     args[maxResultsKey] = params.maxResultCount;
+  }
+
+  if (fieldMaskKey) {
+    args[fieldMaskKey] =
+      "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.googleMapsUri";
   }
 
   return args;
@@ -1016,7 +1028,7 @@ const recommendInternal = async (
                     query: keyword,
                     locationText,
                     location: locationCoords,
-                    radiusMeters,
+                    radiusMeters: radiusMeters,
                     nextPageToken: supportsNextPageToken ? nextPageToken : undefined,
                     maxResultCount,
                   }),

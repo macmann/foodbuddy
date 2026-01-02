@@ -1,66 +1,50 @@
 import { Prisma } from "@prisma/client";
-
 import { prisma } from "./db";
 import { logger } from "./logger";
 
 export type SearchSessionState = {
-  id: string;
+  sessionId: string;
+  channel?: string | null;
   lastQuery: string;
-  lat: number;
-  lng: number;
-  radius: number;
+  lastLat: number;
+  lastLng: number;
+  lastRadiusM: number;
   nextPageToken?: string | null;
 };
 
-export const loadSearchSession = async (id: string) => {
+export const loadSearchSession = async (sessionId: string) => {
   try {
-    return await prisma.searchSession.findUnique({ where: { id } });
+    return await prisma.searchSession.findUnique({ where: { sessionId } });
   } catch (err) {
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === "P2021" &&
-      String((err.meta as { table?: string } | undefined)?.table ?? "").includes(
-        "SearchSession",
-      )
-    ) {
-      logger.warn({ err }, "SearchSession table missing; skipping session load");
-      return null;
-    }
-    throw err;
+    logger.error({ err, sessionId }, "Failed to load search session");
+    return null;
   }
 };
 
 export const upsertSearchSession = async (state: SearchSessionState) => {
   try {
     return await prisma.searchSession.upsert({
-      where: { id: state.id },
+      where: { sessionId: state.sessionId },
       create: {
-        id: state.id,
+        sessionId: state.sessionId,
+        channel: state.channel ?? null,
         lastQuery: state.lastQuery,
-        lat: state.lat,
-        lng: state.lng,
-        radius: state.radius,
+        lastLat: state.lastLat,
+        lastLng: state.lastLng,
+        lastRadiusM: state.lastRadiusM,
         nextPageToken: state.nextPageToken ?? null,
       },
       update: {
+        channel: state.channel ?? null,
         lastQuery: state.lastQuery,
-        lat: state.lat,
-        lng: state.lng,
-        radius: state.radius,
+        lastLat: state.lastLat,
+        lastLng: state.lastLng,
+        lastRadiusM: state.lastRadiusM,
         nextPageToken: state.nextPageToken ?? null,
       },
     });
   } catch (err) {
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === "P2021" &&
-      String((err.meta as { table?: string } | undefined)?.table ?? "").includes(
-        "SearchSession",
-      )
-    ) {
-      logger.warn({ err }, "SearchSession table missing; skipping session upsert");
-      return null;
-    }
-    throw err;
+    logger.error({ err, sessionId: state.sessionId }, "Failed to upsert search session");
+    return null;
   }
 };
