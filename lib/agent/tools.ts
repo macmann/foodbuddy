@@ -497,7 +497,6 @@ const buildTextSearchArgs = (
     radiusMeters?: number;
     nextPageToken?: string;
     maxResultCount?: number;
-    radiusMeters?: number;
   },
 ): Record<string, unknown> => {
   const schema = tool.inputSchema;
