@@ -12,7 +12,6 @@ import { getLLMSettings } from "../../../lib/settings/llm";
 import { isAllowedModel } from "../../../lib/agent/model";
 import type {
   ChatResponse,
-  ChatResponseDebug,
   RecommendationCardData,
 } from "../../../lib/types/chat";
 
@@ -44,6 +43,16 @@ type Attempt = {
   resultsCount: number;
   keyword: string | undefined;
   googleStatus: string | undefined;
+};
+
+type LegacyChatStatus = "OK" | "NO_RESULTS" | "ERROR" | "fallback";
+
+type ToolDebugInfo = {
+  endpointUsed?: string;
+  provider?: string;
+  googleStatus?: string;
+  error_message?: string;
+  attempts?: Attempt[];
 };
 
 const coerceNumber = (value: unknown): number | undefined => {
@@ -151,7 +160,7 @@ const parseChatRequestBody = (payload: unknown): ChatRequestBody | null => {
 
 const buildToolDebug = (
   toolDebug?: Record<string, unknown>,
-): ChatResponseDebug["tool"] | undefined => {
+): ToolDebugInfo | undefined => {
   if (!toolDebug) {
     return undefined;
   }
@@ -194,78 +203,104 @@ const buildRecommendationPayload = (
   });
 };
 
+const normalizeChatStatus = (
+  status?: LegacyChatStatus,
+): ChatResponse["status"] => {
+  if (status === "ERROR" || status === "fallback") {
+    return "error";
+  }
+  return "ok";
+};
+
+const sanitizeMessage = (message: string | null | undefined, fallback: string) => {
+  if (!message) {
+    return fallback;
+  }
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  const looksLikeJson = trimmed.startsWith("{") || trimmed.startsWith("[");
+  const looksLikeStack =
+    /traceback|stack trace|stacktrace/i.test(trimmed) || /\n\s*at\s+\S+\s*\(/.test(trimmed);
+  if (looksLikeJson || looksLikeStack) {
+    return fallback;
+  }
+  return trimmed;
+};
+
+const buildChatResponse = ({
+  status,
+  message,
+  places,
+  sessionId,
+  nextPageToken,
+}: {
+  status: ChatResponse["status"];
+  message: string;
+  places: RecommendationCardData[];
+  sessionId?: string;
+  nextPageToken?: string;
+}): ChatResponse => ({
+  status,
+  message,
+  places,
+  meta:
+    sessionId || nextPageToken
+      ? {
+          sessionId,
+          nextPageToken,
+        }
+      : undefined,
+});
+
 const buildAgentResponse = ({
   agentMessage,
   recommendations,
   status,
-  toolCallCount,
   requestId,
-  llmModel,
-  fallbackUsed,
   errorMessage,
-  latencyMs,
   debugEnabled,
   toolDebug,
   sessionId,
 }: {
   agentMessage: string | null | undefined;
   recommendations: RecommendationCardData[];
-  status?: ChatResponse["status"];
-  toolCallCount: number;
+  status?: LegacyChatStatus;
   requestId: string;
-  llmModel?: string | null;
-  fallbackUsed?: boolean;
   errorMessage?: string;
-  latencyMs: number;
   debugEnabled: boolean;
   toolDebug?: Record<string, unknown>;
   sessionId: string;
 }): ChatResponse => {
   const hasRecommendations = recommendations.length > 0;
-  const trimmedMessage = agentMessage?.trim();
-  const toolDebugInfo = isRecord(toolDebug) ? toolDebug : undefined;
-  const toolInfo = buildToolDebug(toolDebugInfo);
-  const toolProvider = toolInfo?.provider;
-  const message =
-    trimmedMessage && trimmedMessage.length > 0
-      ? trimmedMessage
-      : hasRecommendations
-        ? "Here are a few places you might like."
-        : "Tell me a neighborhood or enable location so I can find nearby places.";
-  const primary = recommendations[0] ?? null;
-  const alternatives = recommendations.slice(1, 6);
-  const resolvedStatus = status ?? (hasRecommendations ? "OK" : "NO_RESULTS");
-  const successfull = resolvedStatus !== "ERROR" && resolvedStatus !== "fallback";
-  return {
-    message,
+  const resolvedStatus = normalizeChatStatus(status ?? (hasRecommendations ? "OK" : "NO_RESULTS"));
+  const baseMessage = hasRecommendations
+    ? "Here are a few places you might like."
+    : "Tell me a neighborhood or enable location so I can find nearby places.";
+  const errorFallback = "Sorry, something went wrong while finding places.";
+  const message = sanitizeMessage(
+    agentMessage,
+    resolvedStatus === "error" ? errorFallback : baseMessage,
+  );
+  if (debugEnabled && errorMessage) {
+    const toolDebugInfo = isRecord(toolDebug) ? toolDebug : undefined;
+    const toolInfo = buildToolDebug(toolDebugInfo);
+    logger.info(
+      {
+        requestId,
+        toolProvider: toolInfo?.provider,
+        errorMessage,
+      },
+      "Agent tool debug summary",
+    );
+  }
+  return buildChatResponse({
     status: resolvedStatus,
-    primary,
-    alternatives,
+    message,
     places: recommendations,
     sessionId,
-    successfull,
-    error:
-      resolvedStatus === "ERROR" || resolvedStatus === "fallback"
-        ? { message: errorMessage ?? "Unable to fetch nearby places." }
-        : undefined,
-    meta: {
-      source: "agent",
-      toolCallCount,
-      llmModel: llmModel ?? undefined,
-      fallbackUsed,
-      latencyMs,
-      errorMessage,
-      debug: errorMessage || toolProvider ? { provider: toolProvider, error: errorMessage } : undefined,
-    },
-    debug: debugEnabled
-      ? {
-          source: "llm_agent",
-          toolCallCount,
-          requestId,
-          tool: toolInfo,
-        }
-      : undefined,
-  };
+  });
 };
 
 export async function POST(request: Request) {
@@ -281,17 +316,22 @@ export async function POST(request: Request) {
         ...logContext,
         latencyMs: Date.now() - startTime,
         responseKeys: Object.keys(payload),
-        primary: Boolean(payload.primary),
-        altCount: payload.alternatives?.length ?? 0,
         placesCount: payload.places?.length ?? 0,
       },
       "Returning ChatResponse",
     );
     return response;
   };
-  const respondError = (status: number, payload: Record<string, unknown>) => {
-    const response = NextResponse.json(payload, { status });
-    response.headers.set("x-request-id", requestId);
+  const respondError = (status: number, message: string, sessionId?: string) => {
+    const response = respondChat(
+      status,
+      buildChatResponse({
+        status: "error",
+        message,
+        places: [],
+        sessionId,
+      }),
+    );
     logger.info({ ...logContext, latencyMs: Date.now() - startTime }, "chat request complete");
     return response;
   };
@@ -299,13 +339,13 @@ export async function POST(request: Request) {
   const body = parseChatRequestBody(await request.json());
 
   if (!body) {
-    return respondError(400, { error: "Invalid request" });
+    return respondError(400, "Invalid request.");
   }
 
   const sessionId = body.sessionId ?? randomUUID();
 
   if (body.message.length > 500) {
-    return respondError(400, { error: "Message too long" });
+    return respondError(400, "Message too long.", sessionId);
   }
 
   const userIdHash = hashUserId(body.anonId);
@@ -352,15 +392,20 @@ export async function POST(request: Request) {
   );
 
   if (locationEnabled && !coords) {
-    return respondError(400, {
-      error: "LOCATION_REQUIRED",
-      message: "Please share your location or set a neighborhood.",
-    });
+    return respondError(
+      400,
+      "Please share your location or set a neighborhood.",
+      sessionId,
+    );
   }
 
   const limiter = rateLimit(`chat:${userIdHash}`, 10, 60_000);
   if (!limiter.allowed) {
-    const response = respondError(429, { error: "Rate limit exceeded" });
+    const response = respondError(
+      429,
+      "Too many requests. Please wait a moment and try again.",
+      sessionId,
+    );
     response.headers.set(
       "Retry-After",
       Math.ceil((limiter.resetAt - Date.now()) / 1000).toString(),
@@ -426,11 +471,7 @@ export async function POST(request: Request) {
             agentMessage: message,
             recommendations: [],
             status: "ERROR",
-            toolCallCount: 0,
             requestId,
-            llmModel,
-            fallbackUsed: false,
-            latencyMs: Date.now() - startTime,
             debugEnabled,
             sessionId,
           }),
@@ -545,12 +586,8 @@ export async function POST(request: Request) {
             agentMessage: agentResult.message,
             recommendations,
             status,
-            toolCallCount: agentResult.toolCallCount,
             requestId,
-            llmModel,
-            fallbackUsed: agentResult.fallbackUsed,
             errorMessage: agentResult.errorMessage,
-            latencyMs: Date.now() - agentStart,
             debugEnabled,
             toolDebug: agentResult.toolDebug,
             sessionId,
@@ -588,6 +625,7 @@ export async function POST(request: Request) {
   if (!coords) {
     logger.info({ ...logContext, path: "fallback" }, "Missing location for chat");
     const message = "Please share a location so I can find nearby places.";
+    const responseStatus = llmTimedOut ? "fallback" : "ERROR";
     await writeRecommendationEvent(
       {
         channel: "WEB",
@@ -613,21 +651,15 @@ export async function POST(request: Request) {
         parsedConstraints: parseQuery(body.message),
       },
     );
-    return respondChat(200, {
-      primary: null,
-      alternatives: [],
-      message,
-      status: llmTimedOut ? "fallback" : "ERROR",
-      places: [],
-      sessionId,
-      successfull: false,
-      error: { message: "Please share a location so I can find nearby places." },
-      meta: {
-        source: "internal",
-        toolCallCount: 0,
-        latencyMs: Date.now() - startTime,
-      },
-    });
+    return respondChat(
+      200,
+      buildChatResponse({
+        status: normalizeChatStatus(responseStatus),
+        message,
+        places: [],
+        sessionId,
+      }),
+    );
   }
 
   const recommendationStart = Date.now();
@@ -647,7 +679,6 @@ export async function POST(request: Request) {
     });
 
     const payload = buildRecommendationPayload(recommendation, coords);
-    const [primary, ...alternatives] = payload;
     const recommendedPlaceIds = payload.map((item) => item.placeId);
     const resultCount = payload.length;
     const recommendationDebug = recommendation.debug as
@@ -662,7 +693,6 @@ export async function POST(request: Request) {
         ? "NO_RESULTS"
         : "OK";
     const responseStatus = llmTimedOut ? "fallback" : status;
-    const successfull = responseStatus !== "ERROR" && responseStatus !== "fallback";
 
     await writeRecommendationEvent(
       {
@@ -702,31 +732,22 @@ export async function POST(request: Request) {
         ? "Here are a few spots you might like."
         : "Sorry, I couldn't find any places for that query.");
 
-    return respondChat(200, {
-      primary: primary ?? null,
-      alternatives,
-      message,
-      status: responseStatus,
-      places: payload,
-      sessionId,
-      successfull,
-      error:
-        responseStatus === "ERROR" || responseStatus === "fallback"
-          ? { message: providerErrorMessage ?? "Unable to fetch nearby places." }
-          : undefined,
-      meta: {
-        source: "internal",
-        toolCallCount: 0,
-        latencyMs: Date.now() - recommendationStart,
-        errorMessage: providerErrorMessage,
-        debug: providerErrorMessage
-          ? {
-              provider: recommendationDebug?.tool?.provider,
-              error: recommendationDebug?.tool?.error_message,
-            }
-          : undefined,
-      },
-    });
+    if (providerErrorMessage) {
+      logger.info(
+        { ...logContext, provider: recommendationDebug?.tool?.provider },
+        providerErrorMessage,
+      );
+    }
+
+    return respondChat(
+      200,
+      buildChatResponse({
+        status: normalizeChatStatus(responseStatus),
+        message,
+        places: payload,
+        sessionId,
+      }),
+    );
   } catch (fallbackError) {
     const errorMessage =
       fallbackError instanceof Error ? fallbackError.message : "Unknown error";
@@ -758,21 +779,15 @@ export async function POST(request: Request) {
       },
     );
     logger.error({ err: fallbackError, ...logContext }, "Failed fallback recommendations");
-    return respondChat(200, {
-      primary: null,
-      alternatives: [],
-      message: "Sorry, something went wrong while finding places.",
-      status: "ERROR",
-      places: [],
-      sessionId,
-      successfull: false,
-      error: { message: errorMessage },
-      meta: {
-        source: "internal",
-        toolCallCount: 0,
-        latencyMs: Date.now() - recommendationStart,
-      },
-    });
+    return respondChat(
+      200,
+      buildChatResponse({
+        status: "error",
+        message: "Sorry, something went wrong while finding places.",
+        places: [],
+        sessionId,
+      }),
+    );
   }
 }
 

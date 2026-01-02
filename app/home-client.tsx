@@ -15,10 +15,7 @@ type ChatMessage = MessageBubbleData & {
   places?: RecommendationCardData[];
   alternatives?: RecommendationCardData[];
   status?: ChatResponse["status"];
-  providerError?: boolean;
-  errorMessage?: string;
   responseError?: boolean;
-  errorDetails?: unknown;
 };
 
 const isRecommendationCard = (
@@ -36,6 +33,19 @@ const PLACEHOLDER_OPTIONS = [
 const getRandomPlaceholder = () =>
   PLACEHOLDER_OPTIONS[Math.floor(Math.random() * PLACEHOLDER_OPTIONS.length)];
 const DEFAULT_RADIUS_M = 1500;
+
+const normalizeStatus = (
+  status: ChatResponse["status"] | string | undefined,
+): ChatResponse["status"] => {
+  if (!status) {
+    return "error";
+  }
+  const normalized = status.toLowerCase();
+  if (normalized === "ok" || normalized === "no_results") {
+    return "ok";
+  }
+  return "error";
+};
 
 export default function HomePageClient() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -218,10 +228,8 @@ export default function HomePageClient() {
       });
 
       if (!response.ok) {
-        const errorBody = (await response.json().catch(() => null)) as
-          | { message?: string }
-          | null;
-        const errorMessage = errorBody?.message ?? "Request failed";
+        const errorBody = (await response.json().catch(() => null)) as ChatResponse | null;
+        const errorMessage = errorBody?.message ?? "Request failed.";
         setToastMessage(errorMessage);
         return;
       }
@@ -231,19 +239,12 @@ export default function HomePageClient() {
         console.log("Chat response", {
           status: data.status,
           message: data.message,
-          primary: Boolean(data.primary),
-          alternatives: data.alternatives?.length ?? 0,
           places: data.places?.length ?? 0,
-          debug: data.debug,
         });
       }
-      const recommendations = (data.primary ? [data.primary] : []).filter(
-        isRecommendationCard,
-      ) as RecommendationCardData[];
-      const alternatives = (data.alternatives ?? []).filter(
-        isRecommendationCard,
-      ) as RecommendationCardData[];
       const places = (data.places ?? []).filter(isRecommendationCard) as RecommendationCardData[];
+      const recommendations = places.slice(0, 3);
+      const alternatives = places.slice(3, 7);
       const combined = places.concat(recommendations, alternatives);
       const seen = new Set<string>();
       const feedbackRecommendations = combined.filter((item) => {
@@ -270,11 +271,8 @@ export default function HomePageClient() {
         setFeedbackPromptVisible(false);
       }
 
-      const providerError = data.status === "ERROR" && Boolean(data.meta?.errorMessage);
-      const responseError =
-        data.successfull === false || Boolean(data.error) || data.status === "fallback";
-      const errorDetails =
-        data.error ?? (data.status === "fallback" ? { status: data.status } : undefined);
+      const normalizedStatus = normalizeStatus(data.status);
+      const responseError = normalizedStatus === "error" && places.length === 0;
       const hasPlaces = places.length > 0;
       const assistantMessage: ChatMessage = {
         id: createId(),
@@ -283,12 +281,9 @@ export default function HomePageClient() {
         recommendations,
         alternatives,
         places,
-        status: data.status,
-        providerError,
-        errorMessage: data.meta?.errorMessage,
+        status: normalizedStatus,
         responseError,
-        errorDetails,
-        error: data.status === "ERROR",
+        error: normalizedStatus === "error",
         createdAt: Date.now(),
       };
 
@@ -438,7 +433,9 @@ export default function HomePageClient() {
             {messages.map((message) => (
               <div key={message.id} className="space-y-3">
                 <MessageBubble message={message} onRetry={handleRetry}>
-                  {message.places && message.places.length > 0 && (
+                  {message.places &&
+                    message.places.length > 0 &&
+                    (!message.recommendations || message.recommendations.length === 0) && (
                     <div className="mt-3 grid gap-3">
                       {message.places.map((place) => (
                         <PlaceCard key={place.placeId} place={place} />
@@ -477,18 +474,13 @@ export default function HomePageClient() {
                   )}
                   {message.role === "assistant" &&
                     message.status &&
-                    message.status.toUpperCase() !== "OK" &&
+                    message.status !== "ok" &&
                     (!message.places || message.places.length === 0) && (
                       <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
                         We couldn’t find nearby spots right now. Try a different location
                         or tweak your search.
                       </div>
                     )}
-                  {message.role === "assistant" && message.providerError && (
-                    <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                      Places provider unavailable. Please try again in a moment.
-                    </div>
-                  )}
                 </MessageBubble>
                 <div className="h-px w-full bg-slate-100" />
               </div>

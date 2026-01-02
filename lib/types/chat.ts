@@ -13,47 +13,14 @@ export type RecommendationCardData = {
   rationale?: string;
 };
 
-export type AgentMeta = {
-  source: "agent" | "internal";
-  toolCallCount: number;
-  llmModel?: string;
-  fallbackUsed?: boolean;
-  latencyMs?: number;
-  errorMessage?: string;
-  debug?: {
-    provider?: string;
-    error?: string;
-  };
-};
-
-export type ChatResponseDebug = {
-  source: "llm_agent";
-  toolCallCount: number;
-  requestId: string;
-  tool?: {
-    endpointUsed?: string;
-    provider?: string;
-    googleStatus?: string;
-    error_message?: string;
-    attempts?: Array<{
-      radius: number;
-      keyword?: string;
-      endpoint: string;
-      resultsCount: number;
-      googleStatus?: string;
-    }>;
-  };
-};
+export type Place = RecommendationCardData;
 
 export type ChatResponse = {
+  status: "ok" | "error";
   message: string;
-  status: "OK" | "NO_RESULTS" | "ERROR" | "fallback";
-  primary: RecommendationCardData | null;
-  alternatives: RecommendationCardData[];
-  places: RecommendationCardData[];
-  sessionId: string;
-  meta: AgentMeta;
-  debug?: ChatResponseDebug;
-  successfull?: boolean;
-  error?: unknown;
+  places: Place[];
+  meta?: {
+    sessionId?: string;
+    nextPageToken?: string;
+  };
 };
