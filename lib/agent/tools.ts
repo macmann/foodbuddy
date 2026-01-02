@@ -496,12 +496,14 @@ const buildTextSearchArgs = (
     location?: { lat: number; lng: number };
     nextPageToken?: string;
     maxResultCount?: number;
+    radiusMeters?: number;
   },
 ): Record<string, unknown> => {
   const schema = tool.inputSchema;
   const args: Record<string, unknown> = {};
   const queryKey = matchSchemaKey(schema, ["query", "text", "input", "search"]);
   const locationKey = matchSchemaKey(schema, ["location", "near", "bias"]);
+  const locationBiasKey = matchSchemaKey(schema, ["locationbias", "location_bias"]);
   const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
   const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
   const nextPageTokenKey = matchSchemaKey(schema, [
@@ -512,6 +514,7 @@ const buildTextSearchArgs = (
     "pageToken",
   ]);
   const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
+  const fieldMaskKey = matchSchemaKey(schema, ["fieldmask", "field_mask", "fields"]);
 
   const queryValue = params.locationText
     ? `${params.query} in ${params.locationText}`
@@ -536,12 +539,29 @@ const buildTextSearchArgs = (
     args[locationKey] = params.locationText;
   }
 
+  if (params.location && typeof params.radiusMeters === "number" && locationBiasKey) {
+    args[locationBiasKey] = {
+      circle: {
+        center: {
+          latitude: params.location.lat,
+          longitude: params.location.lng,
+        },
+        radius: params.radiusMeters,
+      },
+    };
+  }
+
   if (nextPageTokenKey && params.nextPageToken) {
     args[nextPageTokenKey] = params.nextPageToken;
   }
 
   if (maxResultsKey && params.maxResultCount) {
     args[maxResultsKey] = params.maxResultCount;
+  }
+
+  if (fieldMaskKey) {
+    args[fieldMaskKey] =
+      "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.googleMapsUri";
   }
 
   return args;
@@ -985,6 +1005,7 @@ const recommendInternal = async (
                     query: keyword,
                     locationText,
                     location: locationCoords,
+                    radiusMeters: radiusMeters,
                     nextPageToken: supportsNextPageToken ? nextPageToken : undefined,
                     maxResultCount,
                   }),

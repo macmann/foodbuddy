@@ -169,6 +169,7 @@ export const recommend = async (
       lat: input.location.lat,
       lng: input.location.lng,
       query,
+      radiusMeters: radii[radii.length - 1] ?? baseRadius,
       requestId: input.requestId ?? undefined,
     });
     candidates = response.results;

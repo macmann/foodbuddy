@@ -282,6 +282,19 @@ const sanitizeMessage = (message: string | null | undefined, fallback: string) =
   return trimmed;
 };
 
+const stripMcpLogs = (message: string | null | undefined) => {
+  if (!message) {
+    return "";
+  }
+  const withoutJsonLogs = message
+    .replace(/"logs"\s*:\s*\[[\s\S]*?\]\s*,?/gi, "")
+    .replace(/"logs"\s*:\s*\{[\s\S]*?\}\s*,?/gi, "");
+  const filteredLines = withoutJsonLogs
+    .split("\n")
+    .filter((line) => !/^logs?\s*[:=]/i.test(line.trim()));
+  return filteredLines.join("\n").trim();
+};
+
 const followUpIntentRegex = /show more|more options|next|another|refine/i;
 
 const isFollowUpIntent = (body: ChatRequestBody) =>
@@ -466,6 +479,7 @@ const buildTextSearchArgs = (
     location?: { lat: number; lng: number };
     nextPageToken?: string;
     maxResultCount?: number;
+    radiusMeters?: number;
   },
 ) => {
   const schema = tool.inputSchema;
@@ -473,6 +487,7 @@ const buildTextSearchArgs = (
   const queryKey = matchSchemaKey(schema, ["query", "text", "input", "search"]);
   const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
   const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
+  const locationBiasKey = matchSchemaKey(schema, ["locationbias", "location_bias"]);
   const nextPageTokenKey = matchSchemaKey(schema, [
     "nextpagetoken",
     "next_page_token",
@@ -481,6 +496,7 @@ const buildTextSearchArgs = (
     "pageToken",
   ]);
   const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
+  const fieldMaskKey = matchSchemaKey(schema, ["fieldmask", "field_mask", "fields"]);
 
   if (queryKey) {
     args[queryKey] = params.query;
@@ -499,12 +515,29 @@ const buildTextSearchArgs = (
     args.location = { lat: params.location.lat, lng: params.location.lng };
   }
 
+  if (params.location && typeof params.radiusMeters === "number" && locationBiasKey) {
+    args[locationBiasKey] = {
+      circle: {
+        center: {
+          latitude: params.location.lat,
+          longitude: params.location.lng,
+        },
+        radius: params.radiusMeters,
+      },
+    };
+  }
+
   if (nextPageTokenKey && params.nextPageToken) {
     args[nextPageTokenKey] = params.nextPageToken;
   }
 
   if (maxResultsKey && params.maxResultCount) {
     args[maxResultsKey] = params.maxResultCount;
+  }
+
+  if (fieldMaskKey) {
+    args[fieldMaskKey] =
+      "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.googleMapsUri";
   }
 
   return args;
@@ -742,6 +775,7 @@ const fetchMoreFromMcp = async ({
       buildTextSearchArgs(selectedTool, {
         query: session.lastQuery,
         location: { lat: session.lat, lng: session.lng },
+        radiusMeters,
         nextPageToken,
         maxResultCount,
       }),
@@ -839,7 +873,7 @@ const buildAgentResponse = ({
     : "Tell me a neighborhood or enable location so I can find nearby places.";
   const errorFallback = "Sorry, something went wrong while finding places.";
   const message = sanitizeMessage(
-    agentMessage,
+    stripMcpLogs(agentMessage),
     resolvedStatus === "error" ? errorFallback : baseMessage,
   );
   if (debugEnabled && errorMessage) {
