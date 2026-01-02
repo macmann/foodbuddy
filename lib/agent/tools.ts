@@ -8,6 +8,7 @@ import { resolvePlacesProvider } from "../places";
 import type { Coordinates, PlaceCandidate } from "../places";
 import { haversineMeters } from "../reco/scoring";
 import { parseQuery, recommend } from "../reco/engine";
+import { loadSearchSession, upsertSearchSession } from "../searchSession";
 import type { RecommendationCardData } from "../types";
 import type { ToolSchema } from "./types";
 
@@ -52,6 +53,8 @@ type LastSearchState = {
   keyword: string;
   radiusMeters: number;
   nextPageToken?: string;
+  lat: number;
+  lng: number;
 };
 
 const lastSearchBySession = new Map<string, LastSearchState>();
@@ -95,14 +98,32 @@ const getNextPageToken = (payload: unknown): string | undefined => {
   return undefined;
 };
 
-const getLastSearch = (context: AgentToolContext): LastSearchState | null => {
+const getLastSearch = async (
+  context: AgentToolContext,
+): Promise<LastSearchState | null> => {
   if (!context.sessionId) {
     return null;
   }
-  return lastSearchBySession.get(context.sessionId) ?? null;
+  const cached = lastSearchBySession.get(context.sessionId);
+  if (cached) {
+    return cached;
+  }
+  const stored = await loadSearchSession(context.sessionId);
+  if (!stored) {
+    return null;
+  }
+  const hydrated = {
+    keyword: stored.lastQuery,
+    radiusMeters: stored.radius,
+    nextPageToken: stored.nextPageToken ?? undefined,
+    lat: stored.lat,
+    lng: stored.lng,
+  };
+  lastSearchBySession.set(context.sessionId, hydrated);
+  return hydrated;
 };
 
-const setLastSearch = (
+const setLastSearch = async (
   context: AgentToolContext,
   state: LastSearchState,
 ): void => {
@@ -110,19 +131,27 @@ const setLastSearch = (
     return;
   }
   lastSearchBySession.set(context.sessionId, state);
+  await upsertSearchSession({
+    id: context.sessionId,
+    lastQuery: state.keyword,
+    lat: state.lat,
+    lng: state.lng,
+    radius: state.radiusMeters,
+    nextPageToken: state.nextPageToken ?? null,
+  });
 };
 
-const resolvePaginationOverride = (
+const resolvePaginationOverride = async (
   context: AgentToolContext,
   fallback: { keyword: string; radiusMeters: number },
-): { keyword: string; radiusMeters: number; nextPageToken?: string } | null => {
+): Promise<{ keyword: string; radiusMeters: number; nextPageToken?: string } | null> => {
   if (!context.sessionId) {
     return null;
   }
   if (!isPaginationMessage(context.rawMessage)) {
     return null;
   }
-  const lastSearch = getLastSearch(context);
+  const lastSearch = await getLastSearch(context);
   if (!lastSearch) {
     return null;
   }
@@ -528,7 +557,7 @@ const nearbySearch = async (
   const fallbackRadius = clampRadiusMeters(
     args.radius_m ?? context.radius_m ?? parsed.radiusMeters,
   );
-  const paginationOverride = resolvePaginationOverride(context, {
+  const paginationOverride = await resolvePaginationOverride(context, {
     keyword: fallbackKeyword,
     radiusMeters: fallbackRadius,
   });
@@ -582,9 +611,11 @@ const nearbySearch = async (
   );
 
   if (keyword) {
-    setLastSearch(context, {
+    await setLastSearch(context, {
       keyword,
       radiusMeters: usedRadiusMeters,
+      lat: latitude,
+      lng: longitude,
     });
   }
 
@@ -605,7 +636,7 @@ const recommendInternal = async (
     const parsed = parseQuery(args.query);
     const fallbackKeyword = parsed.keyword ?? args.query;
     const fallbackRadius = clampRadiusMeters(context.radius_m ?? parsed.radiusMeters);
-    const paginationOverride = resolvePaginationOverride(context, {
+    const paginationOverride = await resolvePaginationOverride(context, {
       keyword: fallbackKeyword,
       radiusMeters: fallbackRadius,
     });
@@ -983,11 +1014,13 @@ const recommendInternal = async (
           "MCP recommend_places results parsed",
         );
 
-        if (keyword) {
-          setLastSearch(context, {
+        if (keyword && locationCoords) {
+          await setLastSearch(context, {
             keyword,
             radiusMeters: usedRadiusMeters,
             nextPageToken: parsedNextPageToken ?? nextPageToken,
+            lat: locationCoords.lat,
+            lng: locationCoords.lng,
           });
         }
 
@@ -1041,10 +1074,12 @@ const recommendInternal = async (
       };
     });
 
-    if (keyword) {
-      setLastSearch(context, {
+    if (keyword && locationCoords) {
+      await setLastSearch(context, {
         keyword,
         radiusMeters: initialRadiusMeters,
+        lat: locationCoords.lat,
+        lng: locationCoords.lng,
       });
     }
 

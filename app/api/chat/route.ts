@@ -10,6 +10,12 @@ import { getLocationCoords, normalizeGeoLocation, type GeoLocation } from "../..
 import { haversineMeters } from "../../../lib/reco/scoring";
 import { getLLMSettings } from "../../../lib/settings/llm";
 import { isAllowedModel } from "../../../lib/agent/model";
+import { loadSearchSession, upsertSearchSession } from "../../../lib/searchSession";
+import { listMcpTools, mcpCall } from "../../../lib/mcp/client";
+import { extractPlacesFromMcpResult } from "../../../lib/mcp/placesExtractor";
+import { resolveMcpPayloadFromResult } from "../../../lib/mcp/resultParser";
+import { resolveMcpTools, selectSearchTool } from "../../../lib/mcp/toolResolver";
+import type { ToolDefinition } from "../../../lib/mcp/types";
 import type {
   ChatResponse,
   RecommendationCardData,
@@ -25,6 +31,7 @@ type ChatRequestBody = {
   locationText?: string;
   neighborhood?: string;
   message: string;
+  action?: string;
   latitude?: number | null;
   longitude?: number | null;
   radius_m?: number | null;
@@ -114,9 +121,13 @@ const parseChatRequestBody = (payload: unknown): ChatRequestBody | null => {
     typeof payload.sessionId === "string" && payload.sessionId.trim().length > 0
       ? payload.sessionId
       : undefined;
-  const message = typeof payload.message === "string" ? payload.message : "";
-  if (!anonId || !message) {
+  const action = typeof payload.action === "string" ? payload.action : undefined;
+  let message = typeof payload.message === "string" ? payload.message : "";
+  if (!anonId || (!message && action !== "more")) {
     return null;
+  }
+  if (!message && action === "more") {
+    message = "show more options";
   }
   const location =
     isRecord(payload.location) &&
@@ -148,6 +159,7 @@ const parseChatRequestBody = (payload: unknown): ChatRequestBody | null => {
     anonId,
     sessionId,
     message,
+    action,
     location,
     locationText,
     neighborhood,
@@ -227,6 +239,340 @@ const sanitizeMessage = (message: string | null | undefined, fallback: string) =
     return fallback;
   }
   return trimmed;
+};
+
+const isFollowUpRequest = (body: ChatRequestBody) => {
+  const normalized = body.message.trim().toLowerCase();
+  return normalized === "show more options" || body.action === "more";
+};
+
+const getNextPageToken = (payload: unknown): string | undefined => {
+  if (!isRecord(payload)) {
+    return undefined;
+  }
+  const direct =
+    (typeof payload.nextPageToken === "string" && payload.nextPageToken) ||
+    (typeof payload.next_page_token === "string" && payload.next_page_token) ||
+    (typeof payload.pageToken === "string" && payload.pageToken) ||
+    (typeof payload.page_token === "string" && payload.page_token);
+  if (direct) {
+    return direct;
+  }
+  const data = payload.data;
+  if (isRecord(data)) {
+    return getNextPageToken(data);
+  }
+  return undefined;
+};
+
+const getSchemaProperties = (schema?: Record<string, unknown>): string[] => {
+  if (!schema) {
+    return [];
+  }
+  const properties = schema.properties;
+  if (!isRecord(properties)) {
+    return [];
+  }
+  return Object.keys(properties);
+};
+
+const matchSchemaKey = (schema: Record<string, unknown> | undefined, candidates: string[]) => {
+  const keys = getSchemaProperties(schema);
+  const lowerKeys = keys.map((key) => key.toLowerCase());
+  for (const candidate of candidates) {
+    const candidateLower = candidate.toLowerCase();
+    const index = lowerKeys.findIndex((key) => key.includes(candidateLower));
+    if (index >= 0) {
+      return keys[index];
+    }
+  }
+  return undefined;
+};
+
+const hasSchemaProperty = (schema: Record<string, unknown> | undefined, name: string) => {
+  const keys = getSchemaProperties(schema);
+  return keys.some((key) => key.toLowerCase() === name.toLowerCase());
+};
+
+const resolveKeywordSchemaKey = (schema: Record<string, unknown> | undefined) => {
+  if (hasSchemaProperty(schema, "keyword")) {
+    return "keyword";
+  }
+  if (hasSchemaProperty(schema, "query")) {
+    return "query";
+  }
+  return matchSchemaKey(schema, ["textquery", "searchterm", "text", "search"]);
+};
+
+const normalizeMcpPlace = (
+  payload: Record<string, unknown>,
+  origin: { lat: number; lng: number },
+): RecommendationCardData | null => {
+  const displayName = isRecord(payload.displayName) ? payload.displayName : undefined;
+  const displayNameText =
+    typeof displayName?.text === "string" ? displayName.text : undefined;
+  const placeName = typeof payload.name === "string" ? payload.name : undefined;
+  const name = displayNameText ?? placeName;
+
+  if (!name) {
+    return null;
+  }
+
+  const address =
+    typeof payload.formattedAddress === "string"
+      ? payload.formattedAddress
+      : typeof payload.shortFormattedAddress === "string"
+        ? payload.shortFormattedAddress
+        : undefined;
+  const rating = typeof payload.rating === "number" ? payload.rating : undefined;
+  const reviewCount =
+    typeof payload.userRatingCount === "number" ? payload.userRatingCount : undefined;
+  const location = isRecord(payload.location) ? payload.location : undefined;
+  const lat = typeof location?.latitude === "number" ? location.latitude : undefined;
+  const lng = typeof location?.longitude === "number" ? location.longitude : undefined;
+  const mapsUrl =
+    typeof payload.googleMapsUri === "string" ? payload.googleMapsUri : undefined;
+
+  const distanceMeters =
+    lat !== undefined && lng !== undefined
+      ? haversineMeters(origin, { lat, lng })
+      : undefined;
+  const placeId =
+    typeof payload.id === "string" ? payload.id : placeName ?? name;
+
+  return {
+    placeId,
+    name,
+    rating,
+    reviewCount,
+    lat,
+    lng,
+    distanceMeters,
+    address,
+    mapsUrl,
+  };
+};
+
+const buildNearbySearchArgs = (
+  tool: ToolDefinition,
+  params: {
+    lat: number;
+    lng: number;
+    radiusMeters: number;
+    keyword?: string;
+    nextPageToken?: string;
+    maxResultCount?: number;
+  },
+) => {
+  const schema = tool.inputSchema;
+  const args: Record<string, unknown> = {};
+  const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
+  const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
+  const radiusKey = matchSchemaKey(schema, ["radius", "radius_m", "distance"]);
+  const keywordKey = resolveKeywordSchemaKey(schema);
+  const nextPageTokenKey = matchSchemaKey(schema, [
+    "nextpagetoken",
+    "next_page_token",
+    "pagetoken",
+    "page_token",
+    "pageToken",
+  ]);
+  const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
+
+  if (hasSchemaProperty(schema, "location") && (!latKey || !lngKey)) {
+    args.location = { lat: params.lat, lng: params.lng };
+  } else {
+    if (latKey) {
+      args[latKey] = params.lat;
+    }
+    if (lngKey) {
+      args[lngKey] = params.lng;
+    }
+  }
+
+  if (radiusKey) {
+    args[radiusKey] = params.radiusMeters;
+  }
+
+  const keywordValue =
+    typeof params.keyword === "string" && params.keyword.trim().length > 0
+      ? params.keyword.trim()
+      : undefined;
+  if (keywordKey && keywordValue) {
+    args[keywordKey] = keywordValue;
+  }
+
+  if (nextPageTokenKey && params.nextPageToken) {
+    args[nextPageTokenKey] = params.nextPageToken;
+  }
+
+  if (maxResultsKey && params.maxResultCount) {
+    args[maxResultsKey] = params.maxResultCount;
+  }
+
+  return args;
+};
+
+const buildTextSearchArgs = (
+  tool: ToolDefinition,
+  params: {
+    query: string;
+    location?: { lat: number; lng: number };
+    nextPageToken?: string;
+    maxResultCount?: number;
+  },
+) => {
+  const schema = tool.inputSchema;
+  const args: Record<string, unknown> = {};
+  const queryKey = matchSchemaKey(schema, ["query", "text", "input", "search"]);
+  const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
+  const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
+  const nextPageTokenKey = matchSchemaKey(schema, [
+    "nextpagetoken",
+    "next_page_token",
+    "pagetoken",
+    "page_token",
+    "pageToken",
+  ]);
+  const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
+
+  if (queryKey) {
+    args[queryKey] = params.query;
+  } else {
+    args.query = params.query;
+  }
+
+  if (params.location && (latKey || lngKey)) {
+    if (latKey) {
+      args[latKey] = params.location.lat;
+    }
+    if (lngKey) {
+      args[lngKey] = params.location.lng;
+    }
+  } else if (params.location && hasSchemaProperty(schema, "location")) {
+    args.location = { lat: params.location.lat, lng: params.location.lng };
+  }
+
+  if (nextPageTokenKey && params.nextPageToken) {
+    args[nextPageTokenKey] = params.nextPageToken;
+  }
+
+  if (maxResultsKey && params.maxResultCount) {
+    args[maxResultsKey] = params.maxResultCount;
+  }
+
+  return args;
+};
+
+const fetchMoreFromMcp = async ({
+  session,
+  requestId,
+}: {
+  session: {
+    id: string;
+    lastQuery: string;
+    lat: number;
+    lng: number;
+    radius: number;
+    nextPageToken: string;
+  };
+  requestId: string;
+}) => {
+  const mcpUrl = (process.env.COMPOSIO_MCP_URL ?? "").trim().replace(/^"+|"+$/g, "");
+  const composioApiKey = process.env.COMPOSIO_API_KEY ?? "";
+  if (!mcpUrl) {
+    return {
+      places: [],
+      nextPageToken: session.nextPageToken,
+      message: "No more results yet — try a new search.",
+      usedRadius: session.radius,
+    };
+  }
+
+  const tools = await listMcpTools({
+    url: mcpUrl,
+    apiKey: composioApiKey,
+    requestId,
+  });
+  const resolvedTools = resolveMcpTools(tools);
+  const selectedTool = selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
+  if (!selectedTool) {
+    return {
+      places: [],
+      nextPageToken: session.nextPageToken,
+      message: "No more results yet — try a new search.",
+      usedRadius: session.radius,
+    };
+  }
+
+  const supportsNextPageToken = Boolean(
+    matchSchemaKey(selectedTool.inputSchema, [
+      "nextpagetoken",
+      "next_page_token",
+      "pagetoken",
+      "page_token",
+      "pageToken",
+    ]),
+  );
+  const supportsMaxResultCount = Boolean(
+    matchSchemaKey(selectedTool.inputSchema, ["maxresultcount", "maxresults", "limit"]),
+  );
+  const radiusMultiplier = supportsNextPageToken ? 1 : 1.5;
+  const radiusMeters = Math.round(session.radius * radiusMultiplier);
+  const maxResultCount = supportsMaxResultCount ? 30 : undefined;
+  const nextPageToken = supportsNextPageToken ? session.nextPageToken : undefined;
+
+  const callTool = async (tool: ToolDefinition, toolArgs: Record<string, unknown>) => {
+    return mcpCall<unknown>({
+      url: mcpUrl,
+      apiKey: composioApiKey,
+      method: "tools/call",
+      params: { name: tool.name, arguments: toolArgs },
+      requestId,
+    });
+  };
+
+  let payload: unknown;
+  if (selectedTool.name === resolvedTools.textSearch?.name) {
+    payload = await callTool(
+      selectedTool,
+      buildTextSearchArgs(selectedTool, {
+        query: session.lastQuery,
+        location: { lat: session.lat, lng: session.lng },
+        nextPageToken,
+        maxResultCount,
+      }),
+    );
+  } else {
+    payload = await callTool(
+      selectedTool,
+      buildNearbySearchArgs(selectedTool, {
+        lat: session.lat,
+        lng: session.lng,
+        radiusMeters,
+        keyword: session.lastQuery,
+        nextPageToken,
+        maxResultCount,
+      }),
+    );
+  }
+
+  const { payload: parsedPayload } = resolveMcpPayloadFromResult(payload);
+  const { places } = extractPlacesFromMcpResult(payload);
+  const normalized = places
+    .map((place) => normalizeMcpPlace(place, { lat: session.lat, lng: session.lng }))
+    .filter((place): place is RecommendationCardData => Boolean(place));
+  const updatedNextPageToken = getNextPageToken(parsedPayload ?? payload);
+
+  return {
+    places: normalized,
+    nextPageToken: updatedNextPageToken,
+    message:
+      normalized.length > 0
+        ? "Here are more places you might like."
+        : "No more results yet — try a new search.",
+    usedRadius: radiusMeters,
+  };
 };
 
 const buildChatResponse = ({
@@ -413,6 +759,53 @@ export async function POST(request: Request) {
     return response;
   }
 
+  if (isFollowUpRequest(body)) {
+    const storedSession = body.sessionId ? await loadSearchSession(body.sessionId) : null;
+    if (!storedSession || !storedSession.nextPageToken) {
+      return respondChat(
+        200,
+        buildChatResponse({
+          status: "ok",
+          message: "No more results yet — try a new search.",
+          places: [],
+          sessionId,
+        }),
+      );
+    }
+
+    const followUp = await fetchMoreFromMcp({
+      session: {
+        id: storedSession.id,
+        lastQuery: storedSession.lastQuery,
+        lat: storedSession.lat,
+        lng: storedSession.lng,
+        radius: storedSession.radius,
+        nextPageToken: storedSession.nextPageToken,
+      },
+      requestId,
+    });
+
+    await upsertSearchSession({
+      id: storedSession.id,
+      lastQuery: storedSession.lastQuery,
+      lat: storedSession.lat,
+      lng: storedSession.lng,
+      radius: followUp.usedRadius ?? storedSession.radius,
+      nextPageToken: followUp.nextPageToken ?? null,
+    });
+
+    return respondChat(
+      200,
+      buildChatResponse({
+        status: "ok",
+        message: followUp.message,
+        places: followUp.places,
+        sessionId: storedSession.id,
+        nextPageToken: followUp.nextPageToken,
+      }),
+    );
+  }
+
   let settings: Awaited<ReturnType<typeof getLLMSettings>> | undefined;
   let llmTimedOut = false;
   try {
@@ -580,6 +973,18 @@ export async function POST(request: Request) {
           "Agent response complete",
         );
 
+        if (coords) {
+          const existingSession = await loadSearchSession(sessionId);
+          await upsertSearchSession({
+            id: sessionId,
+            lastQuery: body.message,
+            lat: coords.lat,
+            lng: coords.lng,
+            radius: radiusMeters,
+            nextPageToken: existingSession?.nextPageToken ?? null,
+          });
+        }
+
         return respondChat(
           200,
           buildAgentResponse({
@@ -738,6 +1143,15 @@ export async function POST(request: Request) {
         providerErrorMessage,
       );
     }
+
+    await upsertSearchSession({
+      id: sessionId,
+      lastQuery: body.message,
+      lat: coords.lat,
+      lng: coords.lng,
+      radius: radiusMeters,
+      nextPageToken: null,
+    });
 
     return respondChat(
       200,

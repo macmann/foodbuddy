@@ -120,3 +120,13 @@ model LLMSettings {
   verbosity       String   @default("medium")
   updatedAt       DateTime @updatedAt
 }
+
+model SearchSession {
+  id            String   @id
+  lastQuery     String
+  lat           Float
+  lng           Float
+  radius        Int
+  nextPageToken String?
+  updatedAt     DateTime @updatedAt
+}
