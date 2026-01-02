@@ -12,10 +12,22 @@ export type SearchSessionState = {
   nextPageToken?: string | null;
 };
 
+let missingSearchSessionTableLogged = false;
+
+const isMissingSearchSessionTableError = (err: unknown) =>
+  err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2021";
+
 export const loadSearchSession = async (sessionId: string) => {
   try {
     return await prisma.searchSession.findUnique({ where: { sessionId } });
   } catch (err) {
+    if (isMissingSearchSessionTableError(err)) {
+      logger.warn(
+        { sessionId },
+        "SearchSession table missing. Run prisma migrate deploy to apply schema changes.",
+      );
+      return null;
+    }
     logger.error({ err, sessionId }, "Failed to load search session");
     return null;
   }
@@ -44,6 +56,16 @@ export const upsertSearchSession = async (state: SearchSessionState) => {
       },
     });
   } catch (err) {
+    if (isMissingSearchSessionTableError(err)) {
+      if (!missingSearchSessionTableLogged) {
+        missingSearchSessionTableLogged = true;
+        logger.warn(
+          { sessionId: state.sessionId },
+          "SearchSession table missing. Run prisma migrate deploy to apply schema changes.",
+        );
+      }
+      return null;
+    }
     logger.error({ err, sessionId: state.sessionId }, "Failed to upsert search session");
     return null;
   }
