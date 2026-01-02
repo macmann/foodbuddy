@@ -36,6 +36,7 @@ export type RecommendDecisionInput = {
   locationText?: string;
   radiusM: number;
   session?: SessionSnapshot | null;
+  allowSessionLocation?: boolean;
 };
 
 const normalizeKeyword = (value: string | undefined): string | undefined => {
@@ -57,6 +58,7 @@ const normalizeLocationText = (value?: string | null): string | undefined => {
 export const resolveRecommendDecision = (
   input: RecommendDecisionInput,
 ): RecommendDecision | null => {
+  const allowSessionLocation = input.allowSessionLocation ?? true;
   const parsed = parseQuery(input.message);
   const parsedKeyword = normalizeKeyword(parsed.keyword);
   const parsedLocationText = normalizeLocationText(parsed.locationText);
@@ -90,7 +92,11 @@ export const resolveRecommendDecision = (
     };
   }
 
-  if (typeof session?.lastLat === "number" && typeof session?.lastLng === "number") {
+  if (
+    allowSessionLocation &&
+    typeof session?.lastLat === "number" &&
+    typeof session?.lastLng === "number"
+  ) {
     return {
       action: "search",
       keyword,

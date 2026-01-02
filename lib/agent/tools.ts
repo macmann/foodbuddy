@@ -11,6 +11,11 @@ import { parseQuery, recommend } from "../reco/engine";
 import { loadSearchSession, upsertSearchSession } from "../searchSession";
 import type { RecommendationCardData } from "../types";
 import type { ToolSchema } from "./types";
+import {
+  FOOD_PLACE_TYPE_FILTER,
+  buildFoodSearchQuery,
+  filterFoodPlaces,
+} from "../places/foodFilter";
 
 export type AgentToolContext = {
   location: GeoLocation;
@@ -416,6 +421,7 @@ const buildNearbySearchArgs = (
     "pageToken",
   ]);
   const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
+  const fieldMaskKey = matchSchemaKey(schema, ["fieldmask", "field_mask", "fields"]);
 
   if (hasSchemaProperty(schema, "location") && (!latKey || !lngKey)) {
     args.location = { lat: params.lat, lng: params.lng };
@@ -458,6 +464,11 @@ const buildNearbySearchArgs = (
     }
   }
 
+  if (includedTypesKey && !args[includedTypesKey]) {
+    args[includedTypesKey] = FOOD_PLACE_TYPE_FILTER;
+    logKeys.add("includedTypes");
+  }
+
   if (excludedTypesKey && params.excludedTypes !== undefined) {
     const excludedValues = Array.isArray(params.excludedTypes)
       ? params.excludedTypes.filter((item): item is string => typeof item === "string")
@@ -477,6 +488,11 @@ const buildNearbySearchArgs = (
 
   if (maxResultsKey && params.maxResultCount) {
     args[maxResultsKey] = params.maxResultCount;
+  }
+
+  if (fieldMaskKey) {
+    args[fieldMaskKey] =
+      "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.googleMapsUri,places.types,places.primaryType,places.primaryTypeDisplayName,places.businessStatus";
   }
 
   return { args, logKeys: Array.from(logKeys), keywordOmitted };
@@ -504,6 +520,12 @@ const buildTextSearchArgs = (
   const queryKey = matchSchemaKey(schema, ["query", "text", "input", "search"]);
   const locationKey = matchSchemaKey(schema, ["location", "near", "bias"]);
   const locationBiasKey = matchSchemaKey(schema, ["locationbias", "location_bias"]);
+  const rankPreferenceKey = matchSchemaKey(schema, [
+    "rankpreference",
+    "rank_preference",
+    "rankby",
+    "rank_by",
+  ]);
   const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
   const lngKey = matchSchemaKey(schema, ["lng", "lon", "longitude"]);
   const nextPageTokenKey = matchSchemaKey(schema, [
@@ -534,11 +556,12 @@ const buildTextSearchArgs = (
     args.query = queryValue;
   }
 
+  const radiusValue =
+    typeof params.radiusMeters === "number" && Number.isFinite(params.radiusMeters)
+      ? params.radiusMeters
+      : undefined;
+
   if (params.location && locationBiasKey) {
-    const radiusValue =
-      typeof params.radiusMeters === "number" && Number.isFinite(params.radiusMeters)
-        ? params.radiusMeters
-        : undefined;
     args[locationBiasKey] = {
       circle: {
         center: {
@@ -561,16 +584,10 @@ const buildTextSearchArgs = (
     args[locationKey] = params.locationText;
   }
 
-  if (params.location && typeof params.radiusMeters === "number" && locationBiasKey) {
-    args[locationBiasKey] = {
-      circle: {
-        center: {
-          latitude: params.location.lat,
-          longitude: params.location.lng,
-        },
-        radius: params.radiusMeters,
-      },
-    };
+  if (rankPreferenceKey) {
+    args[rankPreferenceKey] = rankPreferenceKey.toLowerCase().includes("rankby")
+      ? "distance"
+      : "DISTANCE";
   }
 
   if (nextPageTokenKey && params.nextPageToken) {
@@ -583,7 +600,7 @@ const buildTextSearchArgs = (
 
   if (fieldMaskKey) {
     args[fieldMaskKey] =
-      "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.googleMapsUri";
+      "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.googleMapsUri,places.types,places.primaryType,places.primaryTypeDisplayName,places.businessStatus";
   }
 
   return args;
@@ -701,6 +718,7 @@ const recommendInternal = async (
     const resolvedQuery = rawQuery || lastSearch?.keyword || "";
     const parsed = parseQuery(resolvedQuery);
     const fallbackKeyword = parsed.keyword ?? resolvedQuery;
+    const normalizedKeyword = buildFoodSearchQuery(fallbackKeyword);
     const requestedMaxResultCount =
       args.maxResultCount && args.maxResultCount > 0
         ? Math.round(args.maxResultCount)
@@ -708,10 +726,10 @@ const recommendInternal = async (
     const maxResultCount = requestedMaxResultCount ?? DEFAULT_MAX_RESULT_COUNT;
     const fallbackRadius = clampRadiusMeters(context.radius_m ?? parsed.radiusMeters);
     const paginationOverride = await resolvePaginationOverride(context, {
-      keyword: fallbackKeyword,
+      keyword: normalizedKeyword,
       radiusMeters: fallbackRadius,
     });
-    const keyword = paginationOverride?.keyword ?? fallbackKeyword;
+    const keyword = paginationOverride?.keyword ?? normalizedKeyword;
     const baseRadiusMeters = clampRadiusMeters(
       paginationOverride?.radiusMeters ?? fallbackRadius,
     );
@@ -901,8 +919,11 @@ const recommendInternal = async (
             };
           }
 
-          const mappedPlaces = placesCandidate
-            .filter((place): place is Record<string, unknown> => isRecord(place))
+          const filteredPlaces = filterFoodPlaces(
+            placesCandidate.filter((place): place is Record<string, unknown> => isRecord(place)),
+            keyword,
+          );
+          const mappedPlaces = filteredPlaces
             .map((place) => normalizeMcpPlace(place, locationCoords))
             .filter((place): place is RecommendationCardData => Boolean(place));
 
@@ -930,6 +951,17 @@ const recommendInternal = async (
           }
 
           const limitedPlaces = mappedPlaces.slice(0, limit);
+          if (limitedPlaces.length === 0) {
+            return {
+              success: true,
+              places: [],
+              parsedCount: placesCandidate.length,
+              mappedCount: mappedPlaces.length,
+              nextPageToken: nextPageTokenParsed,
+              message:
+                "I couldn’t find food places for that. Try a different keyword (e.g., 'hotpot', 'noodle', 'dim sum').",
+            };
+          }
           return {
             success: true,
             places: limitedPlaces,
