@@ -1,35 +1,49 @@
 import { prisma } from "./db";
+import { logger } from "./logger";
 
 export type SearchSessionState = {
-  id: string;
+  sessionId: string;
+  channel?: string | null;
   lastQuery: string;
-  lat: number;
-  lng: number;
-  radius: number;
+  lastLat: number;
+  lastLng: number;
+  lastRadiusM: number;
   nextPageToken?: string | null;
 };
 
-export const loadSearchSession = async (id: string) => {
-  return prisma.searchSession.findUnique({ where: { id } });
+export const loadSearchSession = async (sessionId: string) => {
+  try {
+    return await prisma.searchSession.findUnique({ where: { sessionId } });
+  } catch (err) {
+    logger.error({ err, sessionId }, "Failed to load search session");
+    return null;
+  }
 };
 
 export const upsertSearchSession = async (state: SearchSessionState) => {
-  return prisma.searchSession.upsert({
-    where: { id: state.id },
-    create: {
-      id: state.id,
-      lastQuery: state.lastQuery,
-      lat: state.lat,
-      lng: state.lng,
-      radius: state.radius,
-      nextPageToken: state.nextPageToken ?? null,
-    },
-    update: {
-      lastQuery: state.lastQuery,
-      lat: state.lat,
-      lng: state.lng,
-      radius: state.radius,
-      nextPageToken: state.nextPageToken ?? null,
-    },
-  });
+  try {
+    return await prisma.searchSession.upsert({
+      where: { sessionId: state.sessionId },
+      create: {
+        sessionId: state.sessionId,
+        channel: state.channel ?? null,
+        lastQuery: state.lastQuery,
+        lastLat: state.lastLat,
+        lastLng: state.lastLng,
+        lastRadiusM: state.lastRadiusM,
+        nextPageToken: state.nextPageToken ?? null,
+      },
+      update: {
+        channel: state.channel ?? null,
+        lastQuery: state.lastQuery,
+        lastLat: state.lastLat,
+        lastLng: state.lastLng,
+        lastRadiusM: state.lastRadiusM,
+        nextPageToken: state.nextPageToken ?? null,
+      },
+    });
+  } catch (err) {
+    logger.error({ err, sessionId: state.sessionId }, "Failed to upsert search session");
+    return null;
+  }
 };
