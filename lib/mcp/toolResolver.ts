@@ -55,10 +55,10 @@ export const selectSearchTool = (
   if (hasCoordinates && tools.nearbySearch) {
     return { tool: tools.nearbySearch, strategy: "nearby" };
   }
-  if (tools.textSearch) {
+  if (!hasCoordinates && tools.textSearch) {
     return { tool: tools.textSearch, strategy: "text" };
   }
-  if (tools.nearbySearch) {
+  if (!hasCoordinates && tools.nearbySearch) {
     return { tool: tools.nearbySearch, strategy: "nearby" };
   }
   return { tool: null, strategy: null };
