@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { __test__ } from "./route";
+import {
+  resetExtractPlacesFromMcpResult,
+  searchPlacesWithMcp,
+  setExtractPlacesFromMcpResult,
+} from "../../../lib/chat/routeInternals";
 
 test("searchPlacesWithMcp retries with text search on nearby validation errors", async () => {
   const originalFetch = globalThis.fetch;
@@ -71,7 +75,7 @@ test("searchPlacesWithMcp retries with text search on nearby validation errors",
     }) as typeof fetch;
 
     let extractorCalls = 0;
-    __test__.setExtractPlacesFromMcpResult(() => {
+    setExtractPlacesFromMcpResult(() => {
       extractorCalls += 1;
       if (extractorCalls === 1) {
         return {
@@ -92,7 +96,7 @@ test("searchPlacesWithMcp retries with text search on nearby validation errors",
       };
     });
 
-    const result = await __test__.searchPlacesWithMcp({
+    const result = await searchPlacesWithMcp({
       keyword: "sushi",
       coords: { lat: 1, lng: 2 },
       radiusMeters: 1000,
@@ -112,6 +116,6 @@ test("searchPlacesWithMcp retries with text search on nearby validation errors",
     }
     process.env.COMPOSIO_MCP_URL = originalMcpUrl;
     process.env.COMPOSIO_API_KEY = originalApiKey;
-    __test__.resetExtractPlacesFromMcpResult();
+    resetExtractPlacesFromMcpResult();
   }
 });
