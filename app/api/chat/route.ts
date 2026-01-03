@@ -115,6 +115,14 @@ const coerceString = (value: unknown): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
+const formatRadiusLabel = (radiusMeters: number) => {
+  if (radiusMeters >= 1000) {
+    const kilometers = (radiusMeters / 1000).toFixed(1).replace(/\.0$/, "");
+    return `${kilometers} km`;
+  }
+  return `${radiusMeters} m`;
+};
+
 const INVALID_INCLUDED_TYPES_ERROR = "invalid place type(s) for includedtypes";
 
 const resolveStatusCodeFromRecord = (record: Record<string, unknown>): number | undefined => {
@@ -713,6 +721,7 @@ const buildTextSearchArgs = (
   tool: ToolDefinition,
   params: {
     query: string;
+    queryOverride?: string;
     locationText?: string;
     location?: { lat: number; lng: number };
     nextPageToken?: string;
@@ -753,11 +762,13 @@ const buildTextSearchArgs = (
     Boolean(latKey) ||
     Boolean(lngKey) ||
     hasSchemaProperty(schema, "location");
-  const queryValue = buildFoodTextSearchQuery({
-    keyword: params.query,
-    locationText: params.locationText,
-    coords: params.location,
-  });
+  const queryValue =
+    params.queryOverride ??
+    buildFoodTextSearchQuery({
+      keyword: params.query,
+      locationText: params.locationText,
+      coords: params.location,
+    });
 
   if (queryKey) {
     args[queryKey] = queryValue;
@@ -1076,20 +1087,20 @@ const searchPlacesWithMcp = async ({
   let normalized = filtered
     .map((place) => normalizeMcpPlace(place, coords))
     .filter((place): place is RecommendationCardData => Boolean(place));
-  const maxDistanceMeters = Math.max(
-    radiusMeters * DEFAULT_MAX_DISTANCE_MULTIPLIER,
-    5_000,
-  );
-  const safetyFiltered = filterByMaxDistance(
-    coords,
-    normalized,
-    (place) =>
-      typeof place.lat === "number" && typeof place.lng === "number"
-        ? { lat: place.lat, lng: place.lng }
-        : null,
-    maxDistanceMeters,
-  );
-  if (safetyFiltered.droppedCount > 0) {
+  const maxDistanceMeters = Math.max(radiusMeters * 4, 8_000);
+  const applyDistanceSafetyNet = (
+    items: RecommendationCardData[],
+    retryModeUsed?: string | null,
+  ) => {
+    const result = filterByMaxDistance(
+      coords,
+      items,
+      (place) =>
+        typeof place.lat === "number" && typeof place.lng === "number"
+          ? { lat: place.lat, lng: place.lng }
+          : null,
+      maxDistanceMeters,
+    );
     logger.info(
       {
         requestId,
@@ -1097,27 +1108,100 @@ const searchPlacesWithMcp = async ({
         originLng: coords.lng,
         radiusMeters,
         maxDistanceMeters,
-        droppedCount: safetyFiltered.droppedCount,
-        maxKeptDistance: safetyFiltered.maxKeptDistance,
+        droppedCount: result.droppedCount,
+        retryModeUsed: retryModeUsed ?? null,
+        maxKeptDistance: result.maxKeptDistance,
       },
-      "Dropped MCP places outside safety distance",
+      "Applied MCP distance safety net",
     );
+    return result;
+  };
+
+  const initialSafety = applyDistanceSafetyNet(normalized);
+  const hadPlacesBeforeSafety = normalized.length > 0;
+  normalized = initialSafety.kept;
+
+  let usedDistanceFallback = false;
+  if (
+    locationText &&
+    hadPlacesBeforeSafety &&
+    normalized.length === 0 &&
+    resolvedTools.textSearch
+  ) {
+    usedDistanceFallback = true;
+    const fallbackQuery = `${intentKeyword} in ${locationText}`;
+    const fallbackTool = resolvedTools.textSearch;
+    const fallbackPayload = await mcpCall<unknown>({
+      url: mcpUrl,
+      apiKey: composioApiKey,
+      method: "tools/call",
+      params: {
+        name: fallbackTool.name,
+        arguments: (() => {
+          const { args, query, includedTypes } = buildTextSearchArgs(fallbackTool, {
+            query: intentKeyword,
+            queryOverride: fallbackQuery,
+            location: coords,
+            locationText,
+            radiusMeters,
+            maxResultCount,
+          });
+          logger.info(
+            {
+              requestId,
+              selectedToolName: fallbackTool.name,
+              usedMode: "text",
+              query,
+              includedTypes,
+              radiusMeters,
+              fallback: "distance_safety_net",
+            },
+            "MCP search request",
+          );
+          return args;
+        })(),
+      },
+      requestId,
+    });
+
+    const fallbackParsed = resolveMcpPayloadFromResult(fallbackPayload);
+    const fallbackResult = extractPlacesFromMcp(fallbackPayload);
+    if (fallbackResult.successfull !== false) {
+      parsedPayload = fallbackParsed.payload;
+      places = fallbackResult.places;
+      successfull = fallbackResult.successfull;
+      error = fallbackResult.error;
+      const fallbackFiltered = filterFoodPlaces(places, queryBase);
+      normalized = fallbackFiltered
+        .map((place) => normalizeMcpPlace(place, coords))
+        .filter((place): place is RecommendationCardData => Boolean(place));
+      const retryModeUsed = isNearbySearch ? "nearby->textsearch" : "textsearch->textsearch";
+      normalized = applyDistanceSafetyNet(normalized, retryModeUsed).kept;
+    }
   }
-  normalized = safetyFiltered.kept;
   const nextPageToken = getNextPageToken(parsedPayload ?? payload);
   const safetyDropMessage =
-    safetyFiltered.droppedCount > 0 && normalized.length === 0
+    initialSafety.droppedCount > 0 && normalized.length === 0
       ? "I couldn’t find reliable nearby matches for that location. Try widening your radius or share a more specific neighborhood."
       : null;
   const fallbackMessage =
     usedFallback && normalized.length > 0
       ? "I had trouble with nearby filtering, so I searched by text instead. Here are some options."
       : null;
+  const emptyExplicitLocationMessage =
+    usedDistanceFallback &&
+    normalized.length === 0 &&
+    locationText
+      ? `I couldn’t find results near ${locationText} within ${formatRadiusLabel(
+          radiusMeters,
+        )}. Try a broader keyword or increase radius.`
+      : null;
 
   const message = (() => {
     if (fallbackMessage) return fallbackMessage;
     if (normalized.length > 0) return "Here are a few places you might like.";
     return (
+      emptyExplicitLocationMessage ??
       safetyDropMessage ??
       "I couldn’t find food places nearby. Try a different keyword."
     );
