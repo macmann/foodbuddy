@@ -1,13 +1,6 @@
-const FOOD_PLACE_TYPES = [
-  "restaurant",
-  "food",
-  "meal_takeaway",
-  "meal_delivery",
-  "cafe",
-  "bakery",
-  "bar",
-  "coffee_shop",
-];
+const FOOD_PLACE_TYPES = ["restaurant", "food", "meal_takeaway", "cafe"];
+
+const OPTIONAL_FOOD_TYPES = ["meal_takeaway", "cafe"];
 
 const FOOD_INTENT_KEYWORDS = [
   "food",
@@ -105,6 +98,21 @@ export const buildFoodSearchQuery = (keyword: string): string => {
   return `${trimmed} restaurant`;
 };
 
+export const buildFoodIncludedTypes = (keyword: string | undefined): string[] => {
+  const types = new Set<string>(["restaurant"]);
+  if (!keyword) {
+    return Array.from(types);
+  }
+  const normalized = normalizeText(keyword);
+  if (normalized.includes("cafe") || normalized.includes("coffee") || normalized.includes("tea")) {
+    types.add("cafe");
+  }
+  if (normalized.includes("takeaway") || normalized.includes("takeout")) {
+    types.add("meal_takeaway");
+  }
+  return Array.from(types);
+};
+
 const getPlaceTypes = (place: Record<string, unknown>): string[] => {
   const typesValue = place.types;
   const types =
@@ -135,14 +143,41 @@ const isFoodPlace = (place: Record<string, unknown>, query: string | undefined) 
   if (types.length > 0) {
     return types.some((type) => FOOD_PLACE_TYPES.includes(type));
   }
+  if (query && hasFoodIntent(query)) {
+    return true;
+  }
   const label = normalizeText(getPlaceLabel(place));
-  return hasFoodIntent(query) || containsAny(label, FOOD_NAME_SIGNALS);
+  return label.length > 0 ? containsAny(label, FOOD_NAME_SIGNALS) : true;
 };
 
 export const filterFoodPlaces = (
   places: Record<string, unknown>[],
   query: string | undefined,
-): Record<string, unknown>[] =>
-  places.filter((place) => isFoodPlace(place, query));
+): Record<string, unknown>[] => {
+  const scored = places.map((place) => {
+    const types = getPlaceTypes(place);
+    const hasTypes = types.length > 0;
+    const hasAllowedType = hasTypes
+      ? types.some((type) => FOOD_PLACE_TYPES.includes(type))
+      : true;
+    const matchesIntent = hasAllowedType && isFoodPlace(place, query);
+    return {
+      place,
+      hasTypes,
+      matchesIntent,
+    };
+  });
+
+  return scored
+    .filter((item) => (item.hasTypes ? item.matchesIntent : true))
+    .sort((a, b) => {
+      if (a.hasTypes === b.hasTypes) {
+        return 0;
+      }
+      return a.hasTypes ? -1 : 1;
+    })
+    .map((item) => item.place);
+};
 
 export const FOOD_PLACE_TYPE_FILTER = FOOD_PLACE_TYPES;
+export const OPTIONAL_FOOD_PLACE_TYPE_FILTER = OPTIONAL_FOOD_TYPES;

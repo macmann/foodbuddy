@@ -12,7 +12,7 @@ import { loadSearchSession, upsertSearchSession } from "../searchSession";
 import type { RecommendationCardData } from "../types";
 import type { ToolSchema } from "./types";
 import {
-  FOOD_PLACE_TYPE_FILTER,
+  buildFoodIncludedTypes,
   buildFoodSearchQuery,
   filterFoodPlaces,
 } from "../places/foodFilter";
@@ -422,6 +422,11 @@ const buildNearbySearchArgs = (
   ]);
   const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
   const fieldMaskKey = matchSchemaKey(schema, ["fieldmask", "field_mask", "fields"]);
+  const includedTypesKey = matchSchemaKey(schema, [
+    "includedtypes",
+    "included_types",
+    "includetypes",
+  ]);
 
   if (hasSchemaProperty(schema, "location") && (!latKey || !lngKey)) {
     args.location = { lat: params.lat, lng: params.lng };
@@ -448,24 +453,9 @@ const buildNearbySearchArgs = (
     logKeys.add(keywordKey);
   }
 
-  if (includedTypesKey && keywordValue) {
-    const lowerKeyword = keywordValue.toLowerCase();
-    const includedTypes = new Set<string>();
-    if (lowerKeyword.includes("noodle")) {
-      includedTypes.add("restaurant");
-      includedTypes.add("meal_takeaway");
-    }
-    if (lowerKeyword.includes("takeaway") || lowerKeyword.includes("takeout")) {
-      includedTypes.add("meal_takeaway");
-    }
-    if (includedTypes.size > 0) {
-      args[includedTypesKey] = Array.from(includedTypes);
-      logKeys.add("includedTypes");
-    }
-  }
-
-  if (includedTypesKey && !args[includedTypesKey]) {
-    args[includedTypesKey] = FOOD_PLACE_TYPE_FILTER;
+  if (includedTypesKey) {
+    const includedTypes = buildFoodIncludedTypes(keywordValue);
+    args[includedTypesKey] = includedTypes;
     logKeys.add("includedTypes");
   }
 
@@ -543,9 +533,10 @@ const buildTextSearchArgs = (
     Boolean(latKey) ||
     Boolean(lngKey) ||
     hasSchemaProperty(schema, "location");
-  let queryValue = params.locationText
-    ? `${params.query} in ${params.locationText}`
-    : params.query;
+  let queryValue = params.query;
+  if (params.locationText && !params.location) {
+    queryValue = `${queryValue} in ${params.locationText}`;
+  }
   if (params.location && !supportsLocationBias) {
     queryValue = `${queryValue} near ${params.location.lat},${params.location.lng}`;
   }
@@ -554,6 +545,10 @@ const buildTextSearchArgs = (
     args[queryKey] = queryValue;
   } else {
     args.query = queryValue;
+  }
+
+  if (includedTypesKey) {
+    args[includedTypesKey] = buildFoodIncludedTypes(params.query);
   }
 
   const radiusValue =

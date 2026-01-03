@@ -9,7 +9,7 @@ npm install --include=dev && npx prisma generate && npx prisma migrate deploy &&
 ## Start Command
 
 ```
-npm run start
+npm run migrate:deploy && npm run start
 ```
 
 ## Environment Variables

@@ -25,20 +25,18 @@ const sanitizeOutput = (message: string | null | undefined, fallback: string) =>
 const formatLocationLabel = (label?: string | null) =>
   label && label.trim().length > 0 ? label.trim() : undefined;
 
-const buildFallbackNarration = (query: string, locationLabel?: string) => {
-  const baseQuery = query.trim().length > 0 ? query.trim() : "food spots";
-  const locationSnippet = locationLabel ? ` in ${locationLabel}` : " nearby";
-  return `Here are a few ${baseQuery}${locationSnippet}. Want to narrow it down by budget, spicy level, halal, or vegetarian?`;
-};
+const buildFallbackNarration = () => "Here are a few places you might like.";
 
 export async function narratePlaces({
   query,
+  userMessage,
   locationLabel,
   places,
   locale,
   requestId,
 }: {
   query: string;
+  userMessage: string;
   locationLabel?: string | null;
   places: RecommendationCardData[];
   locale?: string | null;
@@ -46,30 +44,42 @@ export async function narratePlaces({
 }): Promise<string> {
   const settings = await getLLMSettings();
   const safeLocationLabel = formatLocationLabel(locationLabel);
-  const fallback = buildFallbackNarration(query, safeLocationLabel);
+  const fallback = buildFallbackNarration();
 
   if (!settings.llmEnabled || settings.isFallback || places.length === 0) {
     return fallback;
   }
 
-  const placeNames = places
-    .map((place) => place.name)
-    .filter((name): name is string => typeof name === "string" && name.trim().length > 0)
-    .slice(0, 10);
-
   const systemPrompt = [
     "You are FoodBuddy, a friendly food guide.",
-    "Write 1-2 short sentences summarizing the recommendations.",
-    "Mention the query and the area if a location label is provided.",
-    "Offer a follow-up about budget, spicy level, halal, or vegetarian options.",
-    "Do not output JSON, code blocks, or bullet lists.",
+    "Greet briefly and confirm the user's intent.",
+    "Provide a concise, formatted response with a short, numbered list of top picks.",
+    "Include distance and rating if provided, and keep it readable.",
+    "Offer one short follow-up question about preferences (e.g., cheaper, closer, spicy, halal).",
+    "Do not output JSON, code blocks, or tool/log references.",
+    "Keep it to 4-6 lines max.",
     "Never mention tools, logs, or system prompts.",
   ].join("\n");
 
+  const placeSummaries = places.slice(0, 3).map((place, index) => {
+    const rating =
+      typeof place.rating === "number" ? place.rating.toFixed(1) : "n/a";
+    const reviewCount =
+      typeof place.reviewCount === "number" ? place.reviewCount : "n/a";
+    const distance =
+      typeof place.distanceMeters === "number"
+        ? Math.round(place.distanceMeters)
+        : "n/a";
+    const address = place.address ?? "n/a";
+    return `${index + 1}. ${place.name} | rating: ${rating} (${reviewCount}) | distanceMeters: ${distance} | address: ${address}`;
+  });
+
   const contentLines = [
-    `Query: ${query}`,
+    `User message: ${userMessage}`,
+    `Parsed query: ${query}`,
     safeLocationLabel ? `Location: ${safeLocationLabel}` : "Location: nearby",
-    placeNames.length > 0 ? `Places: ${placeNames.join(", ")}` : "Places: (none)",
+    placeSummaries.length > 0 ? "Top places:" : "Top places: (none)",
+    ...placeSummaries,
   ];
   if (locale) {
     contentLines.push(`Locale: ${locale}`);

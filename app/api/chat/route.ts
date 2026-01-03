@@ -12,13 +12,18 @@ import { getLLMSettings } from "../../../lib/settings/llm";
 import { isAllowedModel } from "../../../lib/agent/model";
 import { detectIntent, isSmallTalkMessage } from "../../../lib/chat/intent";
 import { narratePlaces } from "../../../lib/chat/narratePlaces";
+import { runSmallTalkLLM } from "../../../lib/chat/smallTalk";
 import {
-  runSmallTalkLLM,
-  SMALL_TALK_FOOD_LOCATION_PROMPT,
-} from "../../../lib/chat/smallTalk";
-import { loadSearchSession, upsertSearchSession } from "../../../lib/searchSession";
+  clearPending,
+  getFollowUpSession,
+  getOrCreateSession,
+  loadSearchSession,
+  setLastLocation,
+  setPending,
+  upsertSearchSession,
+} from "../../../lib/searchSession";
 import {
-  FOOD_PLACE_TYPE_FILTER,
+  buildFoodIncludedTypes,
   buildFoodSearchQuery,
   filterFoodPlaces,
 } from "../../../lib/places/foodFilter";
@@ -26,12 +31,6 @@ import {
   PENDING_ACTION_RECOMMEND,
   resolveRecommendDecision,
 } from "../../../lib/chat/recommendState";
-import {
-  clearPending,
-  getOrCreateSession,
-  setLastLocation,
-  setPending,
-} from "../../../lib/session/searchSession";
 import { listMcpTools, mcpCall } from "../../../lib/mcp/client";
 import { extractPlacesFromMcpResult } from "../../../lib/mcp/placesExtractor";
 import { resolveMcpPayloadFromResult } from "../../../lib/mcp/resultParser";
@@ -48,7 +47,7 @@ export const dynamic = "force-dynamic";
 const defaultTimeoutMs = 12_000;
 const extendedTimeoutMs = 25_000;
 const locationPromptMessage =
-  "Please share your GPS location or type your area/city (e.g., 'Hlaing, Yangon'). What area are you in?";
+  "Share GPS or type area/city (e.g., Yangon, Hlaing, Mandalay).";
 
 type ChatRequestBody = {
   anonId: string;
@@ -311,11 +310,12 @@ const stripMcpLogs = (message: string | null | undefined) => {
   return filteredLines.join("\n").trim();
 };
 
-const cleanUserMessage = (input: string | null | undefined, fallback: string) =>
+const safeUserMessage = (input: string | null | undefined, fallback: string) =>
   sanitizeMessage(stripMcpLogs(input), fallback);
 
 const buildNarratedMessage = async ({
   query,
+  userMessage,
   locationLabel,
   places,
   fallbackMessage,
@@ -323,6 +323,7 @@ const buildNarratedMessage = async ({
   requestId,
 }: {
   query: string;
+  userMessage: string;
   locationLabel?: string;
   places: RecommendationCardData[];
   fallbackMessage: string;
@@ -335,12 +336,13 @@ const buildNarratedMessage = async ({
   try {
     const narrated = await narratePlaces({
       query,
+      userMessage,
       locationLabel,
       places,
       locale: locale ?? undefined,
       requestId,
     });
-    return cleanUserMessage(narrated, fallbackMessage);
+    return safeUserMessage(narrated, fallbackMessage);
   } catch (err) {
     logger.warn({ err, requestId }, "Failed to narrate places");
     return fallbackMessage;
@@ -520,7 +522,7 @@ const buildNearbySearchArgs = (
   }
 
   if (includedTypesKey && !args[includedTypesKey]) {
-    args[includedTypesKey] = FOOD_PLACE_TYPE_FILTER;
+    args[includedTypesKey] = buildFoodIncludedTypes(keywordValue);
   }
 
   if (nextPageTokenKey && params.nextPageToken) {
@@ -572,6 +574,11 @@ const buildTextSearchArgs = (
   ]);
   const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
   const fieldMaskKey = matchSchemaKey(schema, ["fieldmask", "field_mask", "fields"]);
+  const includedTypesKey = matchSchemaKey(schema, [
+    "includedtypes",
+    "included_types",
+    "includetypes",
+  ]);
 
   const supportsLocationBias =
     Boolean(locationBiasKey) ||
@@ -579,7 +586,7 @@ const buildTextSearchArgs = (
     Boolean(lngKey) ||
     hasSchemaProperty(schema, "location");
   let queryValue = params.query;
-  if (params.locationText) {
+  if (params.locationText && !params.location) {
     queryValue = `${queryValue} in ${params.locationText}`;
   }
   if (params.location && !supportsLocationBias) {
@@ -590,6 +597,10 @@ const buildTextSearchArgs = (
     args[queryKey] = queryValue;
   } else {
     args.query = queryValue;
+  }
+
+  if (includedTypesKey) {
+    args[includedTypesKey] = buildFoodIncludedTypes(params.query);
   }
 
   if (params.location && (latKey || lngKey)) {
@@ -758,6 +769,7 @@ const searchPlacesWithMcp = async ({
 
   const queryBase = normalizedKeyword.trim().length > 0 ? normalizedKeyword.trim() : "restaurants";
   const textQuery = queryBase;
+  const maxResultCount = 12;
 
   const payload =
     selectedTool.name === resolvedTools.textSearch?.name
@@ -772,6 +784,7 @@ const searchPlacesWithMcp = async ({
               location: coords,
               radiusMeters,
               locationText,
+              maxResultCount,
             }),
           },
           requestId,
@@ -787,6 +800,7 @@ const searchPlacesWithMcp = async ({
               lng: coords.lng,
               radiusMeters,
               keyword: queryBase,
+              maxResultCount,
             }),
           },
           requestId,
@@ -803,14 +817,12 @@ const searchPlacesWithMcp = async ({
     .filter((place): place is RecommendationCardData => Boolean(place));
   const nextPageToken = getNextPageToken(parsedPayload ?? payload);
 
-  const message =
-    normalized.length > 0
-      ? "Here are a few nearby food places you might like."
-      : "I couldn’t find food places nearby. Try a different keyword.";
-
   return {
     places: normalized,
-    message,
+    message:
+      normalized.length > 0
+        ? "Here are a few places you might like."
+        : "I couldn’t find food places nearby. Try a different keyword.",
     nextPageToken,
   };
 };
@@ -957,7 +969,7 @@ const buildChatResponse = ({
   nextPageToken?: string;
 }): ChatResponse => ({
   status,
-  message,
+  message: safeUserMessage(message, "Here are a few places you might like."),
   places,
   meta:
     sessionId || nextPageToken
@@ -993,7 +1005,7 @@ const buildAgentResponse = ({
     ? "Here are a few places you might like."
     : "Tell me a neighborhood or enable location so I can find nearby places.";
   const errorFallback = "Sorry, something went wrong while finding places.";
-  const message = cleanUserMessage(
+  const message = safeUserMessage(
     agentMessage,
     resolvedStatus === "error" ? errorFallback : baseMessage,
   );
@@ -1130,7 +1142,7 @@ export async function POST(request: Request) {
 
   if (shouldHandleSmallTalk) {
     const fallbackMessage = "Hi! How can I help you today?";
-    const smallTalkMessage = cleanUserMessage(
+    const smallTalkMessage = safeUserMessage(
       await runSmallTalkLLM({
         userMessage: body.message,
         locale,
@@ -1149,165 +1161,11 @@ export async function POST(request: Request) {
     );
   }
 
-  if (intent === "FOOD_INTENT") {
-    if (!coords && !locationText) {
-      await setPending(sessionId, {
-        action: PENDING_ACTION_RECOMMEND,
-        keyword: body.message,
-      });
-      const smallTalkMessage = cleanUserMessage(
-        await runSmallTalkLLM({
-          userMessage: body.message,
-          locale,
-          requestId,
-        }),
-        SMALL_TALK_FOOD_LOCATION_PROMPT,
-      );
-      return respondChat(
-        200,
-        buildChatResponse({
-          status: "ok",
-          message: smallTalkMessage,
-          places: [],
-          sessionId,
-        }),
-      );
-    }
-
-    if (!coords && locationText) {
-      await setPending(sessionId, {
-        action: PENDING_ACTION_RECOMMEND,
-        keyword: body.message,
-      });
-      const geocodeResult = await geocodeLocationText({
-        locationText,
-        requestId,
-      });
-      if (!geocodeResult.coords) {
-        return respondChat(
-          200,
-          buildChatResponse({
-            status: "ok",
-            message: `I couldn't find that location. ${locationPromptMessage}`,
-            places: [],
-            sessionId,
-          }),
-        );
-      }
-
-      const resolvedLocationLabel = geocodeResult.formattedAddress ?? locationText;
-
-      await setLastLocation(sessionId, {
-        lat: geocodeResult.coords.lat,
-        lng: geocodeResult.coords.lng,
-        radiusM: radiusMeters,
-      });
-      await clearPending(sessionId);
-
-      const searchResult = await searchPlacesWithMcp({
-        keyword: body.message,
-        coords: geocodeResult.coords,
-        radiusMeters,
-        requestId,
-        locationText: resolvedLocationLabel,
-      });
-
-      await upsertSearchSession({
-        sessionId,
-        channel,
-        lastQuery: buildFoodSearchQuery(body.message),
-        lastLat: geocodeResult.coords.lat,
-        lastLng: geocodeResult.coords.lng,
-        lastRadiusM: radiusMeters,
-        nextPageToken: searchResult.nextPageToken ?? null,
-      });
-
-      const confirmMessage = `Got it — searching near ${resolvedLocationLabel}…`;
-      const searchFallbackMessage =
-        searchResult.places.length > 0
-          ? "Here are a few places you might like."
-          : "I couldn’t find food places for that. Try a different keyword (e.g., 'hotpot', 'noodle', 'dim sum').";
-      const narratedMessage = await buildNarratedMessage({
-        query: body.message,
-        locationLabel: resolvedLocationLabel,
-        places: searchResult.places,
-        fallbackMessage: searchFallbackMessage,
-        locale,
-        requestId,
-      });
-
-      return respondChat(
-        200,
-        buildChatResponse({
-          status: "ok",
-          message: `${confirmMessage} ${narratedMessage}`,
-          places: searchResult.places,
-          sessionId,
-          nextPageToken: searchResult.nextPageToken,
-        }),
-      );
-    }
-
-    if (coords) {
-      await clearPending(sessionId);
-      await setLastLocation(sessionId, {
-        lat: coords.lat,
-        lng: coords.lng,
-        radiusM: radiusMeters,
-      });
-
-      const searchResult = await searchPlacesWithMcp({
-        keyword: body.message,
-        coords,
-        radiusMeters,
-        requestId,
-      });
-
-      await upsertSearchSession({
-        sessionId,
-        channel,
-        lastQuery: buildFoodSearchQuery(body.message),
-        lastLat: coords.lat,
-        lastLng: coords.lng,
-        lastRadiusM: radiusMeters,
-        nextPageToken: searchResult.nextPageToken ?? null,
-      });
-
-      const searchFallbackMessage =
-        searchResult.places.length > 0
-          ? "Here are a few places you might like."
-          : "I couldn’t find food places for that. Try a different keyword (e.g., 'hotpot', 'noodle', 'dim sum').";
-      const narratedMessage = await buildNarratedMessage({
-        query: body.message,
-        locationLabel: locationText,
-        places: searchResult.places,
-        fallbackMessage: searchFallbackMessage,
-        locale,
-        requestId,
-      });
-
-      return respondChat(
-        200,
-        buildChatResponse({
-          status: "ok",
-          message: narratedMessage,
-          places: searchResult.places,
-          sessionId,
-          nextPageToken: searchResult.nextPageToken,
-        }),
-      );
-    }
-  }
-
   if (isFollowUpRequest(body)) {
-    const storedSession = body.sessionId ? await loadSearchSession(body.sessionId) : null;
-    if (
-      !storedSession ||
-      storedSession.lastLat === null ||
-      storedSession.lastLng === null ||
-      !storedSession.lastQuery ||
-      storedSession.lastRadiusM === null
-    ) {
+    const storedSession = body.sessionId
+      ? await getFollowUpSession(body.sessionId)
+      : null;
+    if (!storedSession) {
       return respondChat(
         200,
         buildChatResponse({
@@ -1320,23 +1178,16 @@ export async function POST(request: Request) {
     }
 
     const followUp = await fetchMoreFromMcp({
-      session: {
-        id: storedSession.sessionId,
-        lastQuery: storedSession.lastQuery,
-        lat: storedSession.lastLat,
-        lng: storedSession.lastLng,
-        radius: storedSession.lastRadiusM,
-        nextPageToken: storedSession.nextPageToken,
-      },
+      session: storedSession,
       requestId,
     });
 
     await upsertSearchSession({
-      sessionId: storedSession.sessionId,
+      sessionId: storedSession.id,
       lastQuery: storedSession.lastQuery,
-      lastLat: storedSession.lastLat,
-      lastLng: storedSession.lastLng,
-      lastRadiusM: followUp.usedRadius ?? storedSession.lastRadiusM,
+      lastLat: storedSession.lat,
+      lastLng: storedSession.lng,
+      lastRadiusM: followUp.usedRadius ?? storedSession.radius,
       nextPageToken: followUp.nextPageToken ?? null,
     });
 
@@ -1346,6 +1197,7 @@ export async function POST(request: Request) {
         : "No more results yet — try a new search.";
     const followUpMessage = await buildNarratedMessage({
       query: storedSession.lastQuery,
+      userMessage: body.message,
       locationLabel: locationText,
       places: followUp.places,
       fallbackMessage: followUpFallbackMessage,
@@ -1359,7 +1211,7 @@ export async function POST(request: Request) {
         status: "ok",
         message: followUpMessage,
         places: followUp.places,
-        sessionId: storedSession.sessionId,
+        sessionId: storedSession.id,
         nextPageToken: followUp.nextPageToken,
       }),
     );
@@ -1448,6 +1300,7 @@ export async function POST(request: Request) {
           : "I couldn’t find food places for that. Try a different keyword (e.g., 'hotpot', 'noodle', 'dim sum').";
       const searchMessage = await buildNarratedMessage({
         query: decision.keyword,
+        userMessage: body.message,
         locationLabel: resolvedLocationLabel,
         places: searchResult.places,
         fallbackMessage: searchFallbackMessage,
@@ -1502,6 +1355,7 @@ export async function POST(request: Request) {
         status: "ok",
         message: await buildNarratedMessage({
           query: decision.keyword,
+          userMessage: body.message,
           locationLabel: locationText,
           places: searchResult.places,
           fallbackMessage: searchFallbackMessage,
