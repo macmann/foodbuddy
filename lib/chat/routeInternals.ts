@@ -384,6 +384,12 @@ const formatRadiusLabel = (radiusMeters: number) => {
   return `${radiusMeters} m`;
 };
 
+type McpPlacesSearchResult = {
+  places: RecommendationCardData[];
+  message: string;
+  nextPageToken?: string;
+};
+
 export const searchPlacesWithMcp = async ({
   keyword,
   coords,
@@ -398,7 +404,7 @@ export const searchPlacesWithMcp = async ({
   requestId: string;
   locationText?: string;
   distanceRetryAttempted?: boolean;
-}) => {
+}): Promise<McpPlacesSearchResult> => {
   const mcpUrl = (process.env.COMPOSIO_MCP_URL ?? "").trim().replace(/^"+|"+$/g, "");
   const composioApiKey = process.env.COMPOSIO_API_KEY ?? "";
   if (!mcpUrl) {
