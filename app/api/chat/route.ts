@@ -7,6 +7,8 @@ import { rateLimit } from "../../../lib/rateLimit";
 import { parseQuery, recommend, writeRecommendationEvent } from "../../../lib/reco/engine";
 import { runFoodBuddyAgent } from "../../../lib/agent/agent";
 import { getLocationCoords, normalizeGeoLocation, type GeoLocation } from "../../../lib/location";
+import { DEFAULT_MAX_DISTANCE_MULTIPLIER } from "../../../lib/geo/constants";
+import { filterByMaxDistance } from "../../../lib/geo/safetyNet";
 import { haversineMeters } from "../../../lib/reco/scoring";
 import { getLLMSettings } from "../../../lib/settings/llm";
 import { isAllowedModel } from "../../../lib/agent/model";
@@ -257,6 +259,8 @@ const buildRecommendationPayload = (
       placeId: item.place.placeId,
       name: item.place.name,
       rating: item.place.rating,
+      lat: item.place.lat,
+      lng: item.place.lng,
       distanceMeters,
       openNow: item.place.openNow,
       address: item.place.address,
@@ -806,17 +810,50 @@ const searchPlacesWithMcp = async ({
     logger.warn({ requestId, error }, "MCP place search failed");
   }
   const filtered = filterFoodPlaces(places, queryBase);
-  const normalized = filtered
+  let normalized = filtered
     .map((place) => normalizeMcpPlace(place, coords))
     .filter((place): place is RecommendationCardData => Boolean(place));
+  const maxDistanceMeters = Math.max(
+    radiusMeters * DEFAULT_MAX_DISTANCE_MULTIPLIER,
+    5_000,
+  );
+  const safetyFiltered = filterByMaxDistance(
+    coords,
+    normalized,
+    (place) =>
+      typeof place.lat === "number" && typeof place.lng === "number"
+        ? { lat: place.lat, lng: place.lng }
+        : null,
+    maxDistanceMeters,
+  );
+  if (safetyFiltered.droppedCount > 0) {
+    logger.info(
+      {
+        requestId,
+        originLat: coords.lat,
+        originLng: coords.lng,
+        radiusMeters,
+        maxDistanceMeters,
+        droppedCount: safetyFiltered.droppedCount,
+        maxKeptDistance: safetyFiltered.maxKeptDistance,
+      },
+      "Dropped MCP places outside safety distance",
+    );
+  }
+  normalized = safetyFiltered.kept;
   const nextPageToken = getNextPageToken(parsedPayload ?? payload);
+  const safetyDropMessage =
+    safetyFiltered.droppedCount > 0 && normalized.length === 0
+      ? "I couldn’t find reliable nearby matches for that location. Try widening your radius or share a more specific neighborhood."
+      : null;
 
   return {
     places: normalized,
     message:
       normalized.length > 0
         ? "Here are a few places you might like."
-        : "I couldn’t find food places nearby. Try a different keyword.",
+        : safetyDropMessage ??
+          "I couldn’t find food places nearby. Try a different keyword.",
     nextPageToken,
   };
 };
@@ -1635,7 +1672,35 @@ export async function POST(request: Request) {
       requestId,
     });
 
-    const payload = buildRecommendationPayload(recommendation, coords);
+    let payload = buildRecommendationPayload(recommendation, coords);
+    const maxDistanceMeters = Math.max(
+      radiusMeters * DEFAULT_MAX_DISTANCE_MULTIPLIER,
+      5_000,
+    );
+    const safetyFiltered = filterByMaxDistance(
+      coords,
+      payload,
+      (item) =>
+        typeof item.lat === "number" && typeof item.lng === "number"
+          ? { lat: item.lat, lng: item.lng }
+          : null,
+      maxDistanceMeters,
+    );
+    if (safetyFiltered.droppedCount > 0) {
+      logger.info(
+        {
+          requestId,
+          originLat: coords.lat,
+          originLng: coords.lng,
+          radiusMeters,
+          maxDistanceMeters,
+          droppedCount: safetyFiltered.droppedCount,
+          maxKeptDistance: safetyFiltered.maxKeptDistance,
+        },
+        "Dropped internal recommendations outside safety distance",
+      );
+    }
+    payload = safetyFiltered.kept;
     const recommendedPlaceIds = payload.map((item) => item.placeId);
     const resultCount = payload.length;
     const recommendationDebug = recommendation.debug as

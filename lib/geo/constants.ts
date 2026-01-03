@@ -1,0 +1,1 @@
+export const DEFAULT_MAX_DISTANCE_MULTIPLIER = 4;
