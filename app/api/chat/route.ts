@@ -1116,14 +1116,18 @@ const searchPlacesWithMcp = async ({
       ? "I had trouble with nearby filtering, so I searched by text instead. Here are some options."
       : null;
 
+  const message = (() => {
+    if (fallbackMessage) return fallbackMessage;
+    if (normalized.length > 0) return "Here are a few places you might like.";
+    return (
+      safetyDropMessage ??
+      "I couldn’t find food places nearby. Try a different keyword."
+    );
+  })();
+
   return {
     places: normalized,
-    message:
-      fallbackMessage ??
-      (normalized.length > 0
-        ? "Here are a few places you might like."
-        : safetyDropMessage ??
-          "I couldn’t find food places nearby. Try a different keyword.",
+    message,
     nextPageToken,
   };
 };
