@@ -36,7 +36,7 @@ import {
   resolveRecommendDecision,
 } from "../../../lib/chat/recommendState";
 import { listMcpTools, mcpCall } from "../../../lib/mcp/client";
-import { extractPlacesFromMcpResult } from "../../../lib/mcp/placesExtractor";
+import { extractPlacesFromMcp } from "./route.test-helpers";
 import { resolveMcpPayloadFromResult } from "../../../lib/mcp/resultParser";
 import { resolveMcpTools } from "../../../lib/mcp/toolResolver";
 import type { ToolDefinition } from "../../../lib/mcp/types";
@@ -53,7 +53,6 @@ const extendedTimeoutMs = 25_000;
 const locationPromptMessage =
   "Share GPS or type area/city (e.g., Yangon, Hlaing, Mandalay).";
 
-type McpPlacesExtractor = typeof extractPlacesFromMcpResult;
 
 type ChatRequestBody = {
   anonId: string;
@@ -192,7 +191,6 @@ const shouldRetryWithTextSearch = ({
   return extractStatusCode(payload) === 400;
 };
 
-let extractPlacesFromMcp: McpPlacesExtractor = extractPlacesFromMcpResult;
 
 const pickFirstString = (...values: Array<unknown | undefined>) => {
   for (const value of values) {
@@ -2253,14 +2251,3 @@ const truncateJson = (value: string, maxLength = 8000) =>
   value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
 
 const roundCoord = (value: number) => Math.round(value * 100) / 100;
-
-export const __test__ = {
-  searchPlacesWithMcp,
-  fetchMoreFromMcp,
-  setExtractPlacesFromMcpResult(extractor: McpPlacesExtractor) {
-    extractPlacesFromMcp = extractor;
-  },
-  resetExtractPlacesFromMcpResult() {
-    extractPlacesFromMcp = extractPlacesFromMcpResult;
-  },
-};
