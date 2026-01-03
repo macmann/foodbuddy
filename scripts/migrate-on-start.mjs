@@ -41,6 +41,8 @@ try {
   process.exit(1);
 }
 
+console.log("Prisma migrations applied.");
+
 console.log("Ensuring Prisma client is generated...");
 
 try {
