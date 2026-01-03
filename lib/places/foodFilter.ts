@@ -151,11 +151,14 @@ export const buildFoodIncludedTypes = (keyword: string | undefined): string[] =>
   if (normalized.includes("cafe") || normalized.includes("coffee") || normalized.includes("tea")) {
     types.add("cafe");
   }
+  if (normalized.includes("bakery")) {
+    types.add("bakery");
+  }
+  if (normalized.includes("bar")) {
+    types.add("bar");
+  }
   if (normalized.includes("takeaway") || normalized.includes("takeout")) {
     types.add("meal_takeaway");
-  }
-  if (normalized.includes("delivery")) {
-    types.add("meal_delivery");
   }
   return Array.from(types);
 };
