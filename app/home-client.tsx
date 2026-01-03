@@ -273,11 +273,10 @@ export default function HomePageClient() {
 
       const normalizedStatus = normalizeStatus(data.status);
       const responseError = normalizedStatus === "error" && places.length === 0;
-      const hasPlaces = places.length > 0;
       const assistantMessage: ChatMessage = {
         id: createId(),
         role: "assistant",
-        content: hasPlaces ? "" : data.message ?? "Here are a few places to consider.",
+        content: data.message ?? "Here are a few places to consider.",
         recommendations,
         alternatives,
         places,

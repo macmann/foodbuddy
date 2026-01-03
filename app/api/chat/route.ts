@@ -317,6 +317,80 @@ const stripMcpLogs = (message: string | null | undefined) => {
 const safeUserMessage = (input: string | null | undefined, fallback: string) =>
   sanitizeMessage(stripMcpLogs(input), fallback);
 
+const CUISINE_KEYWORDS = [
+  "chinese",
+  "thai",
+  "korean",
+  "japanese",
+  "burmese",
+  "myanmar",
+  "indian",
+  "malay",
+  "vietnamese",
+  "seafood",
+  "vegetarian",
+  "vegan",
+  "halal",
+  "pizza",
+  "burger",
+  "bbq",
+  "barbecue",
+  "hotpot",
+  "dim sum",
+  "noodle",
+  "noodles",
+  "ramen",
+  "sushi",
+  "coffee",
+  "tea",
+  "dessert",
+  "cake",
+  "breakfast",
+  "brunch",
+  "lunch",
+  "dinner",
+];
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const formatCuisineLabel = (keyword: string) => {
+  const normalized = keyword.trim().toLowerCase();
+  if (normalized === "bbq") {
+    return "BBQ";
+  }
+  return normalized
+    .split(" ")
+    .map((word) => (word ? word[0].toUpperCase() + word.slice(1) : word))
+    .join(" ");
+};
+
+const extractCuisineKeyword = (message: string | null | undefined) => {
+  if (!message) {
+    return undefined;
+  }
+  const normalized = message.toLowerCase();
+  return CUISINE_KEYWORDS.find((keyword) =>
+    new RegExp(`\\b${escapeRegExp(keyword)}\\b`, "i").test(normalized),
+  );
+};
+
+const buildPlacesIntroMessage = ({
+  userMessage,
+  locationLabel,
+}: {
+  userMessage?: string;
+  locationLabel?: string;
+}) => {
+  const cuisineKeyword = extractCuisineKeyword(userMessage);
+  const safeLocation = locationLabel?.trim();
+  if (cuisineKeyword && safeLocation) {
+    return `Sure — here are a few ${formatCuisineLabel(
+      cuisineKeyword,
+    )} restaurants near ${safeLocation} you might like.`;
+  }
+  return "Sure — here are a few recommended restaurants near you.";
+};
+
 const buildNarratedMessage = async ({
   query,
   userMessage,
@@ -977,15 +1051,25 @@ const buildChatResponse = ({
   places,
   sessionId,
   nextPageToken,
+  userMessage,
+  locationLabel,
 }: {
   status: ChatResponse["status"];
   message: string;
   places: RecommendationCardData[];
   sessionId?: string;
   nextPageToken?: string;
+  userMessage?: string;
+  locationLabel?: string;
 }): ChatResponse => ({
   status,
-  message: safeUserMessage(message, "Here are a few places you might like."),
+  message: (() => {
+    const sanitizedMessage = safeUserMessage(message, "");
+    if (places.length > 0) {
+      return sanitizedMessage || buildPlacesIntroMessage({ userMessage, locationLabel });
+    }
+    return sanitizedMessage || safeUserMessage(message, "Here are a few places you might like.");
+  })(),
   places,
   meta:
     sessionId || nextPageToken
@@ -1005,6 +1089,8 @@ const buildAgentResponse = ({
   debugEnabled,
   toolDebug,
   sessionId,
+  userMessage,
+  locationLabel,
 }: {
   agentMessage: string | null | undefined;
   recommendations: RecommendationCardData[];
@@ -1014,6 +1100,8 @@ const buildAgentResponse = ({
   debugEnabled: boolean;
   toolDebug?: Record<string, unknown>;
   sessionId: string;
+  userMessage?: string;
+  locationLabel?: string;
 }): ChatResponse => {
   const hasRecommendations = recommendations.length > 0;
   const resolvedStatus = normalizeChatStatus(status ?? (hasRecommendations ? "OK" : "NO_RESULTS"));
@@ -1042,6 +1130,8 @@ const buildAgentResponse = ({
     message,
     places: recommendations,
     sessionId,
+    userMessage,
+    locationLabel,
   });
 };
 
@@ -1173,6 +1263,8 @@ export async function POST(request: Request) {
         message: smallTalkMessage,
         places: [],
         sessionId,
+        userMessage: body.message,
+        locationLabel: locationText,
       }),
     );
   }
@@ -1182,16 +1274,18 @@ export async function POST(request: Request) {
       ? await getFollowUpSession(body.sessionId)
       : null;
     if (!storedSession) {
-      return respondChat(
-        200,
-        buildChatResponse({
-          status: "ok",
-          message: "No more results yet — try a new search.",
-          places: [],
-          sessionId,
-        }),
-      );
-    }
+    return respondChat(
+      200,
+      buildChatResponse({
+        status: "ok",
+        message: "No more results yet — try a new search.",
+        places: [],
+        sessionId,
+        userMessage: body.message,
+        locationLabel: locationText,
+      }),
+    );
+  }
 
     const followUp = await fetchMoreFromMcp({
       session: storedSession,
@@ -1229,6 +1323,8 @@ export async function POST(request: Request) {
         places: followUp.places,
         sessionId: storedSession.id,
         nextPageToken: followUp.nextPageToken,
+        userMessage: body.message,
+        locationLabel: locationText,
       }),
     );
   }
@@ -1256,6 +1352,8 @@ export async function POST(request: Request) {
           message: locationPromptMessage,
           places: [],
           sessionId,
+          userMessage: body.message,
+          locationLabel: locationText,
         }),
       );
     }
@@ -1277,6 +1375,8 @@ export async function POST(request: Request) {
             message: `I couldn't find that location. ${locationPromptMessage}`,
             places: [],
             sessionId,
+            userMessage: body.message,
+            locationLabel: locationText,
           }),
         );
       }
@@ -1331,6 +1431,8 @@ export async function POST(request: Request) {
           places: searchResult.places,
           sessionId,
           nextPageToken: searchResult.nextPageToken,
+          userMessage: body.message,
+          locationLabel: resolvedLocationLabel,
         }),
       );
     }
@@ -1381,6 +1483,8 @@ export async function POST(request: Request) {
         places: searchResult.places,
         sessionId,
         nextPageToken: searchResult.nextPageToken,
+        userMessage: body.message,
+        locationLabel: locationText,
       }),
     );
   }
@@ -1445,6 +1549,8 @@ export async function POST(request: Request) {
             requestId,
             debugEnabled,
             sessionId,
+            userMessage: body.message,
+            locationLabel: locationText,
           }),
         );
       }
@@ -1585,6 +1691,8 @@ export async function POST(request: Request) {
             debugEnabled,
             toolDebug: agentResult.toolDebug,
             sessionId,
+            userMessage: body.message,
+            locationLabel: locationText,
           }),
         );
       }
@@ -1652,6 +1760,8 @@ export async function POST(request: Request) {
         message,
         places: [],
         sessionId,
+        userMessage: body.message,
+        locationLabel: locationText,
       }),
     );
   }
@@ -1789,6 +1899,8 @@ export async function POST(request: Request) {
         message,
         places: payload,
         sessionId,
+        userMessage: body.message,
+        locationLabel: locationText,
       }),
     );
   } catch (fallbackError) {
@@ -1829,6 +1941,8 @@ export async function POST(request: Request) {
         message: "Sorry, something went wrong while finding places.",
         places: [],
         sessionId,
+        userMessage: body.message,
+        locationLabel: locationText,
       }),
     );
   }
