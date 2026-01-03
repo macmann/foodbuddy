@@ -27,7 +27,9 @@ import {
 import {
   buildFoodIncludedTypes,
   buildFoodSearchQuery,
+  buildFoodTextSearchQuery,
   filterFoodPlaces,
+  hasExplicitLocationPhrase,
 } from "../../../lib/places/foodFilter";
 import {
   PENDING_ACTION_RECOMMEND,
@@ -554,7 +556,7 @@ const buildNearbySearchArgs = (
     nextPageToken?: string;
     maxResultCount?: number;
   },
-) => {
+): { args: Record<string, unknown>; includedTypes?: string[] | string } => {
   const schema = tool.inputSchema;
   const args: Record<string, unknown> = {};
   const latKey = matchSchemaKey(schema, ["lat", "latitude"]);
@@ -605,7 +607,7 @@ const buildNearbySearchArgs = (
   }
 
   if (includedTypesKey && !args[includedTypesKey]) {
-    args[includedTypesKey] = ["restaurant", "food"];
+    args[includedTypesKey] = ["restaurant"];
   }
 
   if (excludedTypesKey && !args[excludedTypesKey]) {
@@ -625,7 +627,8 @@ const buildNearbySearchArgs = (
       "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.googleMapsUri,places.types,places.primaryType,places.primaryTypeDisplayName,places.businessStatus";
   }
 
-  return args;
+  const includedTypes = includedTypesKey ? (args[includedTypesKey] as string[] | string) : undefined;
+  return { args, includedTypes };
 };
 
 const buildTextSearchArgs = (
@@ -638,7 +641,7 @@ const buildTextSearchArgs = (
     maxResultCount?: number;
     radiusMeters?: number;
   },
-) => {
+): { args: Record<string, unknown>; query: string; includedTypes?: string[] | string } => {
   const schema = tool.inputSchema;
   const args: Record<string, unknown> = {};
   const queryKey = matchSchemaKey(schema, ["query", "text", "input", "search"]);
@@ -672,10 +675,11 @@ const buildTextSearchArgs = (
     Boolean(latKey) ||
     Boolean(lngKey) ||
     hasSchemaProperty(schema, "location");
-  let queryValue = params.query;
-  if (params.locationText && !params.location) {
-    queryValue = `${queryValue} in ${params.locationText}`;
-  }
+  const queryValue = buildFoodTextSearchQuery({
+    keyword: params.query,
+    locationText: params.locationText,
+    coords: params.location,
+  });
 
   if (queryKey) {
     args[queryKey] = queryValue;
@@ -731,7 +735,8 @@ const buildTextSearchArgs = (
       "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.googleMapsUri,places.types,places.primaryType,places.primaryTypeDisplayName,places.businessStatus";
   }
 
-  return args;
+  const includedTypes = includedTypesKey ? (args[includedTypesKey] as string[] | string) : undefined;
+  return { args, query: queryValue, includedTypes };
 };
 
 const buildGeocodeArgs = (tool: ToolDefinition, locationText: string) => {
@@ -823,8 +828,13 @@ const searchPlacesWithMcp = async ({
   });
   const resolvedTools = resolveMcpTools(tools);
   const normalizedKeyword = buildFoodSearchQuery(keyword);
-  const selectedTool = coords ? resolvedTools.nearbySearch : resolvedTools.textSearch;
-  if (coords && !resolvedTools.nearbySearch) {
+  const intentKeyword = keyword.trim().length > 0 ? keyword.trim() : "restaurant";
+  const preferTextSearch =
+    Boolean(locationText) || hasExplicitLocationPhrase(keyword);
+  const selectedTool = preferTextSearch
+    ? resolvedTools.textSearch ?? resolvedTools.nearbySearch
+    : resolvedTools.nearbySearch ?? resolvedTools.textSearch;
+  if (coords && !selectedTool) {
     return {
       places: [],
       message: "Places search is temporarily unavailable.",
@@ -840,7 +850,6 @@ const searchPlacesWithMcp = async ({
   }
 
   const queryBase = normalizedKeyword.trim().length > 0 ? normalizedKeyword.trim() : "restaurants";
-  const textQuery = queryBase;
   const maxResultCount = 12;
 
   const payload =
@@ -851,13 +860,27 @@ const searchPlacesWithMcp = async ({
           method: "tools/call",
           params: {
             name: selectedTool.name,
-            arguments: buildTextSearchArgs(selectedTool, {
-              query: textQuery,
-              location: coords,
-              radiusMeters,
-              locationText,
-              maxResultCount,
-            }),
+            arguments: (() => {
+              const { args, query, includedTypes } = buildTextSearchArgs(selectedTool, {
+                query: intentKeyword,
+                location: coords,
+                radiusMeters,
+                locationText,
+                maxResultCount,
+              });
+              logger.info(
+                {
+                  requestId,
+                  selectedToolName: selectedTool.name,
+                  usedMode: "text",
+                  query,
+                  includedTypes,
+                  radiusMeters,
+                },
+                "MCP search request",
+              );
+              return args;
+            })(),
           },
           requestId,
         })
@@ -867,13 +890,27 @@ const searchPlacesWithMcp = async ({
           method: "tools/call",
           params: {
             name: selectedTool.name,
-            arguments: buildNearbySearchArgs(selectedTool, {
-              lat: coords.lat,
-              lng: coords.lng,
-              radiusMeters,
-              keyword: queryBase,
-              maxResultCount,
-            }),
+            arguments: (() => {
+              const { args, includedTypes } = buildNearbySearchArgs(selectedTool, {
+                lat: coords.lat,
+                lng: coords.lng,
+                radiusMeters,
+                keyword: queryBase,
+                maxResultCount,
+              });
+              logger.info(
+                {
+                  requestId,
+                  selectedToolName: selectedTool.name,
+                  usedMode: "nearby",
+                  keyword: queryBase,
+                  includedTypes,
+                  radiusMeters,
+                },
+                "MCP search request",
+              );
+              return args;
+            })(),
           },
           requestId,
         });
@@ -964,7 +1001,10 @@ const fetchMoreFromMcp = async ({
   });
   const resolvedTools = resolveMcpTools(tools);
   const normalizedQuery = buildFoodSearchQuery(session.lastQuery);
-  const selectedTool = resolvedTools.nearbySearch;
+  const preferTextSearch = hasExplicitLocationPhrase(session.lastQuery);
+  const selectedTool = preferTextSearch
+    ? resolvedTools.textSearch ?? resolvedTools.nearbySearch
+    : resolvedTools.nearbySearch ?? resolvedTools.textSearch;
   if (!selectedTool) {
     return {
       places: [],
@@ -1004,17 +1044,48 @@ const fetchMoreFromMcp = async ({
   };
 
   let payload: unknown;
-  payload = await callTool(
-    selectedTool,
-    buildNearbySearchArgs(selectedTool, {
+  if (selectedTool.name === resolvedTools.textSearch?.name) {
+    const { args, query, includedTypes } = buildTextSearchArgs(selectedTool, {
+      query: session.lastQuery,
+      location: { lat: session.lat, lng: session.lng },
+      radiusMeters,
+      maxResultCount,
+      nextPageToken: supportsNextPageToken ? nextPageToken : undefined,
+    });
+    logger.info(
+      {
+        requestId,
+        selectedToolName: selectedTool.name,
+        usedMode: "text",
+        query,
+        includedTypes,
+        radiusMeters,
+      },
+      "MCP search request",
+    );
+    payload = await callTool(selectedTool, args);
+  } else {
+    const { args, includedTypes } = buildNearbySearchArgs(selectedTool, {
       lat: session.lat,
       lng: session.lng,
       radiusMeters,
       keyword: normalizedQuery,
       nextPageToken,
       maxResultCount,
-    }),
-  );
+    });
+    logger.info(
+      {
+        requestId,
+        selectedToolName: selectedTool.name,
+        usedMode: "nearby",
+        keyword: normalizedQuery,
+        includedTypes,
+        radiusMeters,
+      },
+      "MCP search request",
+    );
+    payload = await callTool(selectedTool, args);
+  }
 
   const { payload: parsedPayload } = resolveMcpPayloadFromResult(payload);
   const { places, successfull, error } = extractPlacesFromMcpResult(payload);

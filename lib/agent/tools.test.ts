@@ -304,3 +304,93 @@ test("recommend_places biases text search toward provided coordinates", async ()
     process.env.COMPOSIO_API_KEY = originalApiKey;
   }
 });
+
+test("recommend_places does not send food in includedTypes", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalProvider = process.env.GOOGLE_PROVIDER;
+  const originalMcpUrl = process.env.COMPOSIO_MCP_URL;
+  const originalApiKey = process.env.COMPOSIO_API_KEY;
+
+  try {
+    process.env.GOOGLE_PROVIDER = "MCP";
+    process.env.COMPOSIO_MCP_URL = "https://example.com";
+    process.env.COMPOSIO_API_KEY = "test-api-key";
+
+    let capturedArgs: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (_input, init) => {
+      const body = init?.body ? JSON.parse(init.body.toString()) : null;
+
+      if (body.method === "tools/list") {
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: {
+              tools: [
+                {
+                  name: "google_maps_places_nearby_search",
+                  inputSchema: {
+                    properties: {
+                      keyword: { type: "string" },
+                      latitude: { type: "number" },
+                      longitude: { type: "number" },
+                      radius_m: { type: "number" },
+                      includedTypes: { type: "array" },
+                    },
+                  },
+                },
+              ],
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      capturedArgs = body?.params?.arguments ?? null;
+
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: {
+            successfull: true,
+            data: {
+              places: [
+                {
+                  id: "mm-1",
+                  displayName: { text: "Hotpot House" },
+                  formattedAddress: "Yangon, Myanmar",
+                  location: { latitude: 21, longitude: 96 },
+                },
+              ],
+            },
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as typeof fetch;
+
+    await toolHandlers.recommend_places(
+      { query: "hotpot" },
+      { location: { kind: "coords", coords: { lat: 21, lng: 96 } } },
+    );
+
+    const includedTypes = capturedArgs?.includedTypes as string[] | undefined;
+    assert.ok(Array.isArray(includedTypes));
+    assert.ok(includedTypes?.includes("restaurant"));
+    assert.equal(includedTypes?.includes("food"), false);
+  } finally {
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+    process.env.GOOGLE_PROVIDER = originalProvider;
+    process.env.COMPOSIO_MCP_URL = originalMcpUrl;
+    process.env.COMPOSIO_API_KEY = originalApiKey;
+  }
+});
