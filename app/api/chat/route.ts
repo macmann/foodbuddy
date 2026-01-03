@@ -1671,7 +1671,8 @@ export async function POST(request: Request) {
           200,
           buildChatResponse({
             status: "ok",
-            message: `I couldn't find that location. ${locationPromptMessage}`,
+            message:
+              "I couldn't find that location. Please confirm a neighborhood or enable location.",
             places: [],
             sessionId,
             userMessage: body.message,
@@ -1701,7 +1702,7 @@ export async function POST(request: Request) {
       await upsertSearchSession({
         sessionId,
         channel,
-        lastQuery: buildFoodSearchQuery(decision.keyword),
+        lastQuery: decision.keyword,
         lastLat: geocodeResult.coords.lat,
         lastLng: geocodeResult.coords.lng,
         lastRadiusM: radiusMeters,

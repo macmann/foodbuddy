@@ -79,7 +79,7 @@ const normalizeText = (value: string) => value.toLowerCase();
 const containsAny = (value: string, terms: string[]) =>
   terms.some((term) => value.includes(term));
 
-const LOCATION_PHRASE_REGEX = /\b(in|near)\s+[a-zA-Z]/i;
+const LOCATION_PHRASE_REGEX = /\b(in|near|around)\s+[a-zA-Z]/i;
 
 export const hasFoodIntent = (query: string | undefined): boolean => {
   if (!query) {
@@ -134,7 +134,7 @@ export const buildFoodTextSearchQuery = ({
 }): string => {
   const intent = buildRestaurantIntent(keyword);
   if (locationText && locationText.trim().length > 0) {
-    return `${intent} in ${locationText.trim()}`;
+    return `${intent} near ${locationText.trim()}`;
   }
   if (coords) {
     return `${intent} near (${coords.lat},${coords.lng})`;
