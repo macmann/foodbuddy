@@ -39,6 +39,21 @@ export type RecommendDecisionInput = {
   allowSessionLocation?: boolean;
 };
 
+const EXPLICIT_LOCATION_REGEX = /(?:near|in|around)\s+([a-zA-Z\s]+)$/i;
+const KNOWN_CITY_TOKENS = [
+  "yangon",
+  "mandalay",
+  "nay pyi taw",
+  "taunggyi",
+  "bago",
+  "pathein",
+  "mawlamyine",
+  "sittwe",
+  "myitkyina",
+  "dawei",
+  "myeik",
+];
+
 const normalizeKeyword = (value: string | undefined): string | undefined => {
   if (!value) {
     return undefined;
@@ -53,6 +68,53 @@ const normalizeLocationText = (value?: string | null): string | undefined => {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+};
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const stripLocationFromKeyword = (keyword: string, locationText: string) => {
+  const pattern = new RegExp(`\\b${escapeRegExp(locationText)}\\b`, "ig");
+  const cleaned = keyword.replace(pattern, " ").replace(/\s{2,}/g, " ").trim();
+  return cleaned.length > 0 ? cleaned : undefined;
+};
+
+const resolveExplicitLocation = (
+  message: string,
+  fallbackKeyword: string,
+): { keyword: string; locationText: string } | null => {
+  const phraseMatch = message.match(EXPLICIT_LOCATION_REGEX);
+  if (phraseMatch && phraseMatch.index !== undefined) {
+    const locationText = phraseMatch[1].trim();
+    const keywordText = message.slice(0, phraseMatch.index).trim();
+    const cleanedKeyword =
+      normalizeKeyword(keywordText) ?? stripLocationFromKeyword(fallbackKeyword, locationText);
+    if (cleanedKeyword) {
+      return { keyword: cleanedKeyword, locationText };
+    }
+    return { keyword: fallbackKeyword, locationText };
+  }
+
+  const cityPattern = new RegExp(
+    `\\b(${KNOWN_CITY_TOKENS.map((token) => escapeRegExp(token).replace(/\\s+/g, "\\\\s+")).join("|")})\\b`,
+    "i",
+  );
+  const cityMatch = message.match(cityPattern);
+  if (cityMatch) {
+    const locationText = cityMatch[0].trim();
+    const keywordText = message
+      .replace(cityMatch[0], " ")
+      .replace(/\b(in|near|around)\b/gi, " ")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+    const cleanedKeyword =
+      normalizeKeyword(keywordText) ?? stripLocationFromKeyword(fallbackKeyword, locationText);
+    if (cleanedKeyword) {
+      return { keyword: cleanedKeyword, locationText };
+    }
+    return { keyword: fallbackKeyword, locationText };
+  }
+
+  return null;
 };
 
 export const resolveRecommendDecision = (
@@ -73,6 +135,15 @@ export const resolveRecommendDecision = (
 
   if (!keyword) {
     return null;
+  }
+
+  const explicitLocation = resolveExplicitLocation(input.message, keyword);
+  if (explicitLocation) {
+    return {
+      action: "geocode",
+      keyword: explicitLocation.keyword,
+      locationText: explicitLocation.locationText,
+    };
   }
 
   const requestLocationText = normalizeLocationText(input.locationText) ?? parsedLocationText;
