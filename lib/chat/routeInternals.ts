@@ -6,6 +6,7 @@ import { listMcpTools, mcpCall } from "../mcp/client";
 import { extractPlacesFromMcpResult } from "../mcp/placesExtractor";
 import { resolveMcpPayloadFromResult } from "../mcp/resultParser";
 import { resolveMcpTools } from "../mcp/toolResolver";
+import { normalizeMcpPlace } from "../places/normalizeMcpPlace";
 import type { ToolDefinition } from "../mcp/types";
 import type { RecommendationCardData } from "../types/chat";
 
@@ -177,55 +178,6 @@ const resolveKeywordSchemaKey = (schema: Record<string, unknown> | undefined) =>
     return "query";
   }
   return matchSchemaKey(schema, ["textquery", "searchterm", "text", "search"]);
-};
-
-const normalizeMcpPlace = (
-  payload: Record<string, unknown>,
-  origin: { lat: number; lng: number },
-): RecommendationCardData | null => {
-  const displayName = isRecord(payload.displayName) ? payload.displayName : undefined;
-  const displayNameText =
-    typeof displayName?.text === "string" ? displayName.text : undefined;
-  const placeName = typeof payload.name === "string" ? payload.name : undefined;
-  const name = displayNameText ?? placeName;
-
-  if (!name) {
-    return null;
-  }
-
-  const address =
-    typeof payload.formattedAddress === "string"
-      ? payload.formattedAddress
-      : typeof payload.shortFormattedAddress === "string"
-        ? payload.shortFormattedAddress
-        : undefined;
-  const rating = typeof payload.rating === "number" ? payload.rating : undefined;
-  const reviewCount =
-    typeof payload.userRatingCount === "number" ? payload.userRatingCount : undefined;
-  const location = isRecord(payload.location) ? payload.location : undefined;
-  const lat = typeof location?.latitude === "number" ? location.latitude : undefined;
-  const lng = typeof location?.longitude === "number" ? location.longitude : undefined;
-  const mapsUrl =
-    typeof payload.googleMapsUri === "string" ? payload.googleMapsUri : undefined;
-
-  const distanceMeters =
-    lat !== undefined && lng !== undefined
-      ? haversineMeters(origin, { lat, lng })
-      : undefined;
-  const placeId =
-    typeof payload.id === "string" ? payload.id : placeName ?? name;
-
-  return {
-    placeId,
-    name,
-    rating,
-    reviewCount,
-    lat,
-    lng,
-    distanceMeters,
-    address,
-    mapsUrl,
-  };
 };
 
 export const buildNearbySearchArgs = (
