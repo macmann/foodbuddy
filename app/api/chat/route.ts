@@ -14,7 +14,6 @@ import { getLLMSettings } from "../../../lib/settings/llm";
 import { isAllowedModel } from "../../../lib/agent/model";
 import { detectIntent, isSmallTalkMessage } from "../../../lib/chat/intent";
 import { narratePlaces } from "../../../lib/chat/narratePlaces";
-import { runSmallTalkLLM } from "../../../lib/chat/smallTalk";
 import {
   clearPending,
   getFollowUpSession,
@@ -462,21 +461,35 @@ const extractCuisineKeyword = (message: string | null | undefined) => {
   );
 };
 
+const formatRadiusKm = (radiusMeters: number) => {
+  const km = radiusMeters / 1000;
+  const rounded = Math.round(km * 10) / 10;
+  return rounded.toFixed(1).replace(/\.0$/, "");
+};
+
 const buildPlacesIntroMessage = ({
   userMessage,
   locationLabel,
+  radiusMeters,
 }: {
   userMessage?: string;
   locationLabel?: string;
+  radiusMeters?: number;
 }) => {
   const cuisineKeyword = extractCuisineKeyword(userMessage);
   const safeLocation = locationLabel?.trim();
-  if (cuisineKeyword && safeLocation) {
-    return `Sure — here are a few ${formatCuisineLabel(
-      cuisineKeyword,
-    )} restaurants near ${safeLocation} you might like.`;
+  if (safeLocation && typeof radiusMeters === "number" && radiusMeters > 0) {
+    return `Here are a few options within ~${formatRadiusKm(
+      radiusMeters,
+    )} km of ${safeLocation}.`;
   }
-  return "Sure — here are a few recommended restaurants near you.";
+  if (safeLocation) {
+    return `Got it — here are a few options near ${safeLocation}.`;
+  }
+  if (cuisineKeyword) {
+    return `Got it — here are a few ${formatCuisineLabel(cuisineKeyword)} options.`;
+  }
+  return "Got it — here are a few options.";
 };
 
 const buildNarratedMessage = async ({
@@ -1436,6 +1449,7 @@ const buildChatResponse = ({
   nextPageToken,
   userMessage,
   locationLabel,
+  radiusMeters,
 }: {
   status: ChatResponse["status"];
   message: string;
@@ -1444,12 +1458,18 @@ const buildChatResponse = ({
   nextPageToken?: string;
   userMessage?: string;
   locationLabel?: string;
+  radiusMeters?: number;
 }): ChatResponse => ({
   status,
   message: (() => {
     const sanitizedMessage = safeUserMessage(message, "");
     if (places.length > 0) {
-      return sanitizedMessage || buildPlacesIntroMessage({ userMessage, locationLabel });
+      const intro = buildPlacesIntroMessage({
+        userMessage,
+        locationLabel,
+        radiusMeters,
+      });
+      return sanitizedMessage ? `${intro} ${sanitizedMessage}` : intro;
     }
     return sanitizedMessage || safeUserMessage(message, "Here are a few places you might like.");
   })(),
@@ -1474,6 +1494,7 @@ const buildAgentResponse = ({
   sessionId,
   userMessage,
   locationLabel,
+  radiusMeters,
 }: {
   agentMessage: string | null | undefined;
   recommendations: RecommendationCardData[];
@@ -1485,6 +1506,7 @@ const buildAgentResponse = ({
   sessionId: string;
   userMessage?: string;
   locationLabel?: string;
+  radiusMeters?: number;
 }): ChatResponse => {
   const hasRecommendations = recommendations.length > 0;
   const resolvedStatus = normalizeChatStatus(status ?? (hasRecommendations ? "OK" : "NO_RESULTS"));
@@ -1515,6 +1537,7 @@ const buildAgentResponse = ({
     sessionId,
     userMessage,
     locationLabel,
+    radiusMeters,
   });
 };
 
@@ -1630,15 +1653,8 @@ export async function POST(request: Request) {
     intent === "SMALL_TALK" && !(hasPendingRecommend && !isSmallTalkMessage(body.message));
 
   if (shouldHandleSmallTalk) {
-    const fallbackMessage = "Hi! How can I help you today?";
-    const smallTalkMessage = safeUserMessage(
-      await runSmallTalkLLM({
-        userMessage: body.message,
-        locale,
-        requestId,
-      }),
-      fallbackMessage,
-    );
+    const smallTalkMessage =
+      "Hi! Tell me what you’re craving, or ask for a cuisine near a place (e.g., 'dim sum near Yangon').";
     return respondChat(
       200,
       buildChatResponse({
@@ -1648,6 +1664,7 @@ export async function POST(request: Request) {
         sessionId,
         userMessage: body.message,
         locationLabel: locationText,
+        radiusMeters,
       }),
     );
   }
@@ -1666,6 +1683,7 @@ export async function POST(request: Request) {
         sessionId,
         userMessage: body.message,
         locationLabel: locationText,
+        radiusMeters,
       }),
     );
   }
@@ -1708,6 +1726,7 @@ export async function POST(request: Request) {
         nextPageToken: followUp.nextPageToken,
         userMessage: body.message,
         locationLabel: locationText,
+        radiusMeters: followUp.usedRadius ?? storedSession.radius,
       }),
     );
   }
@@ -1737,6 +1756,7 @@ export async function POST(request: Request) {
           sessionId,
           userMessage: body.message,
           locationLabel: locationText,
+          radiusMeters,
         }),
       );
     }
@@ -1761,6 +1781,7 @@ export async function POST(request: Request) {
             sessionId,
             userMessage: body.message,
             locationLabel: locationText,
+            radiusMeters,
           }),
         );
       }
@@ -1817,6 +1838,7 @@ export async function POST(request: Request) {
           nextPageToken: searchResult.nextPageToken,
           userMessage: body.message,
           locationLabel: resolvedLocationLabel,
+          radiusMeters,
         }),
       );
     }
@@ -1869,6 +1891,7 @@ export async function POST(request: Request) {
         nextPageToken: searchResult.nextPageToken,
         userMessage: body.message,
         locationLabel: locationText,
+        radiusMeters: decision.radiusM,
       }),
     );
   }
@@ -1935,6 +1958,7 @@ export async function POST(request: Request) {
             sessionId,
             userMessage: body.message,
             locationLabel: locationText,
+            radiusMeters,
           }),
         );
       }
@@ -2077,6 +2101,7 @@ export async function POST(request: Request) {
             sessionId,
             userMessage: body.message,
             locationLabel: locationText,
+            radiusMeters,
           }),
         );
       }
@@ -2146,6 +2171,7 @@ export async function POST(request: Request) {
         sessionId,
         userMessage: body.message,
         locationLabel: locationText,
+        radiusMeters,
       }),
     );
   }
@@ -2285,6 +2311,7 @@ export async function POST(request: Request) {
         sessionId,
         userMessage: body.message,
         locationLabel: locationText,
+        radiusMeters,
       }),
     );
   } catch (fallbackError) {
@@ -2327,6 +2354,7 @@ export async function POST(request: Request) {
         sessionId,
         userMessage: body.message,
         locationLabel: locationText,
+        radiusMeters,
       }),
     );
   }
