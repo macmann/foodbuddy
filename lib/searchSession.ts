@@ -24,7 +24,7 @@ export const loadSearchSession = async (sessionId: string) => {
     if (isMissingSearchSessionTableError(err)) {
       logger.warn(
         { sessionId },
-        "SearchSession table missing. Run prisma migrate deploy to apply schema changes.",
+        "SearchSession table missing. Run prisma migrate deploy.",
       );
       return null;
     }
@@ -61,7 +61,7 @@ export const upsertSearchSession = async (state: SearchSessionState) => {
         missingSearchSessionTableLogged = true;
         logger.warn(
           { sessionId: state.sessionId },
-          "SearchSession table missing. Run prisma migrate deploy to apply schema changes.",
+          "SearchSession table missing. Run prisma migrate deploy.",
         );
       }
       return null;
