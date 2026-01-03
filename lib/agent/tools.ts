@@ -869,9 +869,10 @@ const recommendInternal = async (
             placesCandidate.filter((place): place is Record<string, unknown> => isRecord(place)),
             keyword,
           );
-          const mappedPlaces = locationCoords
+          const coords = locationCoords;
+          const mappedPlaces = coords
             ? filteredPlaces
-                .map((place) => normalizeMcpPlace(place, locationCoords))
+                .map((place) => normalizeMcpPlace(place, coords))
                 .filter((place): place is RecommendationCardData => Boolean(place))
             : [];
 
