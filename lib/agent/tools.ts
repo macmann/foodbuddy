@@ -6,6 +6,7 @@ import { resolveMcpTools, selectSearchTool } from "../mcp/toolResolver";
 import type { ToolDefinition } from "../mcp/types";
 import { resolvePlacesProvider } from "../places";
 import type { Coordinates, PlaceCandidate } from "../places";
+import { normalizeMcpPlace } from "../places/normalizeMcpPlace";
 import { haversineMeters } from "../reco/scoring";
 import { parseQuery, recommend } from "../reco/engine";
 import { loadSearchSession, upsertSearchSession } from "../searchSession";
@@ -311,55 +312,6 @@ const extractLatLng = (payload: unknown): { lat?: number; lng?: number } => {
   }
 
   return {};
-};
-
-const normalizeMcpPlace = (
-  payload: Record<string, unknown>,
-  origin?: Coordinates,
-): RecommendationCardData | null => {
-  const displayName = isRecord(payload.displayName) ? payload.displayName : undefined;
-  const displayNameText =
-    typeof displayName?.text === "string" ? displayName.text : undefined;
-  const placeName = typeof payload.name === "string" ? payload.name : undefined;
-  const name = displayNameText ?? placeName;
-
-  if (!name) {
-    return null;
-  }
-
-  const address =
-    typeof payload.formattedAddress === "string"
-      ? payload.formattedAddress
-      : typeof payload.shortFormattedAddress === "string"
-        ? payload.shortFormattedAddress
-        : undefined;
-  const rating = typeof payload.rating === "number" ? payload.rating : undefined;
-  const reviewCount =
-    typeof payload.userRatingCount === "number" ? payload.userRatingCount : undefined;
-  const location = isRecord(payload.location) ? payload.location : undefined;
-  const lat = typeof location?.latitude === "number" ? location.latitude : undefined;
-  const lng = typeof location?.longitude === "number" ? location.longitude : undefined;
-  const mapsUrl =
-    typeof payload.googleMapsUri === "string" ? payload.googleMapsUri : undefined;
-
-  const distanceMeters =
-    origin && lat !== undefined && lng !== undefined
-      ? haversineMeters(origin, { lat, lng })
-      : undefined;
-  const placeId =
-    typeof payload.id === "string" ? payload.id : placeName ?? name;
-
-  return {
-    placeId,
-    name,
-    rating,
-    reviewCount,
-    lat,
-    lng,
-    distanceMeters,
-    address,
-    mapsUrl,
-  };
 };
 
 const buildProviderFallbackResult = ({
@@ -917,9 +869,11 @@ const recommendInternal = async (
             placesCandidate.filter((place): place is Record<string, unknown> => isRecord(place)),
             keyword,
           );
-          const mappedPlaces = filteredPlaces
-            .map((place) => normalizeMcpPlace(place, locationCoords))
-            .filter((place): place is RecommendationCardData => Boolean(place));
+          const mappedPlaces = locationCoords
+            ? filteredPlaces
+                .map((place) => normalizeMcpPlace(place, locationCoords))
+                .filter((place): place is RecommendationCardData => Boolean(place))
+            : [];
 
           logger.info(
             {

@@ -15,6 +15,7 @@ import { getLLMSettings } from "../../../lib/settings/llm";
 import { isAllowedModel } from "../../../lib/agent/model";
 import { detectIntent, isSmallTalkMessage } from "../../../lib/chat/intent";
 import { narratePlaces } from "../../../lib/chat/narratePlaces";
+import { normalizeMcpPlace } from "../../../lib/places/normalizeMcpPlace";
 import {
   buildNearbySearchArgs,
   buildTextSearchArgs,

@@ -11,6 +11,7 @@ export type RecommendationCardData = {
   address?: string;
   mapsUrl?: string;
   rationale?: string;
+  types?: string[];
 };
 
 export type Place = RecommendationCardData;
