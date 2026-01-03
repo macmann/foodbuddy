@@ -7,6 +7,7 @@ import { rateLimit } from "../../../lib/rateLimit";
 import { parseQuery, recommend, writeRecommendationEvent } from "../../../lib/reco/engine";
 import { runFoodBuddyAgent } from "../../../lib/agent/agent";
 import { getLocationCoords, normalizeGeoLocation, type GeoLocation } from "../../../lib/location";
+import { resolveExplicitLocationForSearch } from "../../../lib/location/resolveLocation";
 import { DEFAULT_MAX_DISTANCE_MULTIPLIER } from "../../../lib/geo/constants";
 import { filterByMaxDistance } from "../../../lib/geo/safetyNet";
 import { haversineMeters } from "../../../lib/reco/scoring";
@@ -35,7 +36,11 @@ import {
   resolveRecommendDecision,
 } from "../../../lib/chat/recommendState";
 import { listMcpTools, mcpCall } from "../../../lib/mcp/client";
-import { extractPlacesFromMcp } from "./route.test-helpers";
+import {
+  extractPlacesFromMcp,
+  resetExtractPlacesFromMcpResult,
+  setExtractPlacesFromMcpResult,
+} from "./route.test-helpers";
 import { resolveMcpPayloadFromResult } from "../../../lib/mcp/resultParser";
 import { resolveMcpTools } from "../../../lib/mcp/toolResolver";
 import type { ToolDefinition } from "../../../lib/mcp/types";
@@ -906,12 +911,14 @@ const searchPlacesWithMcp = async ({
   radiusMeters,
   requestId,
   locationText,
+  distanceRetryAttempted = false,
 }: {
   keyword: string;
   coords: { lat: number; lng: number };
   radiusMeters: number;
   requestId: string;
   locationText?: string;
+  distanceRetryAttempted?: boolean;
 }) => {
   const mcpUrl = (process.env.COMPOSIO_MCP_URL ?? "").trim().replace(/^"+|"+$/g, "");
   const composioApiKey = process.env.COMPOSIO_API_KEY ?? "";
@@ -1100,11 +1107,17 @@ const searchPlacesWithMcp = async ({
   let normalized = filtered
     .map((place) => normalizeMcpPlace(place, coords))
     .filter((place): place is RecommendationCardData => Boolean(place));
-  const maxDistanceMeters = Math.max(radiusMeters * 4, 8_000);
   const applyDistanceSafetyNet = (
     items: RecommendationCardData[],
     retryModeUsed?: string | null,
   ) => {
+    const maxDistanceMeters = Math.max(radiusMeters * 4, 8_000);
+    const candidateDistances = items.slice(0, 3).map((place) => {
+      if (typeof place.lat !== "number" || typeof place.lng !== "number") {
+        return null;
+      }
+      return Math.round(haversineMeters(coords, { lat: place.lat, lng: place.lng }));
+    });
     const result = filterByMaxDistance(
       coords,
       items,
@@ -1121,6 +1134,7 @@ const searchPlacesWithMcp = async ({
         originLng: coords.lng,
         radiusMeters,
         maxDistanceMeters,
+        candidateDistances,
         droppedCount: result.droppedCount,
         retryModeUsed: retryModeUsed ?? null,
         maxKeptDistance: result.maxKeptDistance,
@@ -1133,6 +1147,29 @@ const searchPlacesWithMcp = async ({
   const initialSafety = applyDistanceSafetyNet(normalized);
   const hadPlacesBeforeSafety = normalized.length > 0;
   normalized = initialSafety.kept;
+
+  if (!distanceRetryAttempted && hadPlacesBeforeSafety && normalized.length === 0) {
+    const expandedRadius = Math.min(radiusMeters * 3, 8_000);
+    if (expandedRadius > radiusMeters) {
+      const retryResult = await searchPlacesWithMcp({
+        keyword,
+        coords,
+        radiusMeters: expandedRadius,
+        requestId,
+        locationText,
+        distanceRetryAttempted: true,
+      });
+      const retryMessage = locationText
+        ? `I found places, but they seem far from ${locationText}. I’ll retry with a wider radius.`
+        : "I found places, but they seem far from that spot. I’ll retry with a wider radius.";
+      return {
+        ...retryResult,
+        message: retryResult.message
+          ? `${retryMessage} ${retryResult.message}`.trim()
+          : retryMessage,
+      };
+    }
+  }
 
   let usedDistanceFallback = false;
   if (
@@ -1588,15 +1625,32 @@ export async function POST(request: Request) {
   }
 
   const userIdHash = hashUserId(body.anonId);
-  const locationText = body.neighborhood ?? body.locationText;
+  const requestLocationText = body.neighborhood ?? body.locationText;
   const geoLocation = normalizeGeoLocation({
     coordinates: body.location,
     latitude: body.latitude ?? undefined,
     longitude: body.longitude ?? undefined,
-    locationText,
+    locationText: requestLocationText,
   });
-  const coords = getLocationCoords(geoLocation);
+  const gpsCoords = getLocationCoords(geoLocation);
+  const explicitResolution = await resolveExplicitLocationForSearch({
+    message: body.message,
+    requestId,
+    gpsCoords,
+  });
+  const coords = explicitResolution.coords;
   const hasCoordinates = Boolean(coords);
+  const resolvedLocationLabel =
+    explicitResolution.resolvedLocation?.formattedAddress ??
+    (explicitResolution.locationSource === "explicit_text"
+      ? explicitResolution.explicitLocationText ?? undefined
+      : undefined);
+  const locationText =
+    resolvedLocationLabel ??
+    requestLocationText ??
+    (explicitResolution.locationSource === "none"
+      ? explicitResolution.explicitLocationText ?? undefined
+      : undefined);
   const eventLocation: GeoLocation =
     coords
       ? {
@@ -1617,6 +1671,12 @@ export async function POST(request: Request) {
     locationEnabled &&
     hasCoordinates &&
     !(typeof body.radius_m === "number" && Number.isFinite(body.radius_m) && body.radius_m > 0);
+  const searchMessage =
+    explicitResolution.cleanedQuery.trim().length > 0
+      ? explicitResolution.cleanedQuery
+      : body.message;
+  const sessionQuery =
+    explicitResolution.locationSource === "explicit_text" ? searchMessage : body.message;
 
   logger.info(
     {
@@ -1626,6 +1686,7 @@ export async function POST(request: Request) {
       radius_m,
       radius_defaulted: radius_defaulted || undefined,
       locationEnabled,
+      locationSource: explicitResolution.locationSource,
       timeoutMs,
     },
     "Incoming chat request",
@@ -1732,7 +1793,7 @@ export async function POST(request: Request) {
   }
 
   const decision = resolveRecommendDecision({
-    message: body.message,
+    message: searchMessage,
     action: body.action,
     coords: coords ?? undefined,
     locationText,
@@ -1861,7 +1922,10 @@ export async function POST(request: Request) {
     await upsertSearchSession({
       sessionId,
       channel,
-      lastQuery: buildFoodSearchQuery(decision.keyword),
+      lastQuery:
+        explicitResolution.locationSource === "explicit_text"
+          ? searchMessage
+          : buildFoodSearchQuery(decision.keyword),
       lastLat: searchCoords.lat,
       lastLng: searchCoords.lng,
       lastRadiusM: decision.radiusM,
@@ -1983,7 +2047,7 @@ export async function POST(request: Request) {
         agentResult = await runFoodBuddyAgent({
           userMessage: body.message,
           context: {
-            location: geoLocation,
+            location: eventLocation,
             radius_m,
             sessionId,
             requestId,
@@ -2080,7 +2144,7 @@ export async function POST(request: Request) {
           const existingSession = await loadSearchSession(sessionId);
           await upsertSearchSession({
             sessionId,
-            lastQuery: body.message,
+            lastQuery: sessionQuery,
             lastLat: coords.lat,
             lastLng: coords.lng,
             lastRadiusM: radiusMeters,
@@ -2187,7 +2251,7 @@ export async function POST(request: Request) {
       channel: "WEB",
       userIdHash,
       location: coords,
-      queryText: body.message,
+      queryText: searchMessage,
       radiusMetersOverride: radiusMeters,
       requestId,
     });
@@ -2283,7 +2347,7 @@ export async function POST(request: Request) {
 
     await upsertSearchSession({
       sessionId,
-      lastQuery: body.message,
+      lastQuery: sessionQuery,
       lastLat: coords.lat,
       lastLng: coords.lng,
       lastRadiusM: radiusMeters,
@@ -2364,3 +2428,9 @@ const truncateJson = (value: string, maxLength = 8000) =>
   value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
 
 const roundCoord = (value: number) => Math.round(value * 100) / 100;
+
+export const __test__ = {
+  searchPlacesWithMcp,
+  setExtractPlacesFromMcpResult,
+  resetExtractPlacesFromMcpResult,
+};
