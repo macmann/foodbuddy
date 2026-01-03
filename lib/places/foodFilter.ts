@@ -1,6 +1,6 @@
-const FOOD_PLACE_TYPES = ["restaurant", "food", "meal_takeaway", "cafe"];
+const FOOD_PLACE_TYPES = ["restaurant", "meal_takeaway", "meal_delivery", "cafe"];
 
-const OPTIONAL_FOOD_TYPES = ["meal_takeaway", "cafe"];
+const OPTIONAL_FOOD_TYPES = ["meal_takeaway", "meal_delivery", "cafe"];
 
 const FOOD_INTENT_KEYWORDS = [
   "food",
@@ -79,6 +79,8 @@ const normalizeText = (value: string) => value.toLowerCase();
 const containsAny = (value: string, terms: string[]) =>
   terms.some((term) => value.includes(term));
 
+const LOCATION_PHRASE_REGEX = /\b(in|near)\s+[a-zA-Z]/i;
+
 export const hasFoodIntent = (query: string | undefined): boolean => {
   if (!query) {
     return false;
@@ -98,6 +100,48 @@ export const buildFoodSearchQuery = (keyword: string): string => {
   return `${trimmed} restaurant`;
 };
 
+export const hasExplicitLocationPhrase = (query: string | undefined): boolean => {
+  if (!query) {
+    return false;
+  }
+  return LOCATION_PHRASE_REGEX.test(query);
+};
+
+export const buildRestaurantIntent = (keyword: string): string => {
+  const trimmed = keyword.trim();
+  if (!trimmed) {
+    return "restaurant";
+  }
+  const cleaned = trimmed
+    .replace(/\brestaurants?\b/gi, " ")
+    .replace(/\bfood\b/gi, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (!cleaned) {
+    return "restaurant";
+  }
+  return `${cleaned} restaurant`;
+};
+
+export const buildFoodTextSearchQuery = ({
+  keyword,
+  locationText,
+  coords,
+}: {
+  keyword: string;
+  locationText?: string;
+  coords?: { lat: number; lng: number };
+}): string => {
+  const intent = buildRestaurantIntent(keyword);
+  if (locationText && locationText.trim().length > 0) {
+    return `${intent} in ${locationText.trim()}`;
+  }
+  if (coords) {
+    return `${intent} near (${coords.lat},${coords.lng})`;
+  }
+  return intent;
+};
+
 export const buildFoodIncludedTypes = (keyword: string | undefined): string[] => {
   const types = new Set<string>(["restaurant"]);
   if (!keyword) {
@@ -109,6 +153,9 @@ export const buildFoodIncludedTypes = (keyword: string | undefined): string[] =>
   }
   if (normalized.includes("takeaway") || normalized.includes("takeout")) {
     types.add("meal_takeaway");
+  }
+  if (normalized.includes("delivery")) {
+    types.add("meal_delivery");
   }
   return Array.from(types);
 };

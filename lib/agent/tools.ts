@@ -14,7 +14,9 @@ import type { ToolSchema } from "./types";
 import {
   buildFoodIncludedTypes,
   buildFoodSearchQuery,
+  buildFoodTextSearchQuery,
   filterFoodPlaces,
+  hasExplicitLocationPhrase,
 } from "../places/foodFilter";
 
 export type AgentToolContext = {
@@ -394,7 +396,12 @@ const buildNearbySearchArgs = (
     nextPageToken?: string;
     maxResultCount?: number;
   },
-): { args: Record<string, unknown>; logKeys: string[]; keywordOmitted: boolean } => {
+): {
+  args: Record<string, unknown>;
+  logKeys: string[];
+  keywordOmitted: boolean;
+  includedTypes?: string[] | string;
+} => {
   const schema = tool.inputSchema;
   const args: Record<string, unknown> = {};
   const logKeys = new Set<string>();
@@ -449,7 +456,7 @@ const buildNearbySearchArgs = (
   }
 
   if (includedTypesKey) {
-    args[includedTypesKey] = ["restaurant", "food"];
+    args[includedTypesKey] = ["restaurant"];
     logKeys.add("includedTypes");
   }
 
@@ -472,7 +479,8 @@ const buildNearbySearchArgs = (
       "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.googleMapsUri,places.types,places.primaryType,places.primaryTypeDisplayName,places.businessStatus";
   }
 
-  return { args, logKeys: Array.from(logKeys), keywordOmitted };
+  const includedTypes = includedTypesKey ? (args[includedTypesKey] as string[] | string) : undefined;
+  return { args, logKeys: Array.from(logKeys), keywordOmitted, includedTypes };
 };
 
 const buildGeocodeArgs = (tool: ToolDefinition, text: string): Record<string, unknown> => {
@@ -491,7 +499,7 @@ const buildTextSearchArgs = (
     nextPageToken?: string;
     maxResultCount?: number;
   },
-): Record<string, unknown> => {
+): { args: Record<string, unknown>; query: string; includedTypes?: string[] | string } => {
   const schema = tool.inputSchema;
   const args: Record<string, unknown> = {};
   const queryKey = matchSchemaKey(schema, ["query", "text", "input", "search"]);
@@ -525,10 +533,11 @@ const buildTextSearchArgs = (
     Boolean(latKey) ||
     Boolean(lngKey) ||
     hasSchemaProperty(schema, "location");
-  let queryValue = params.query;
-  if (params.locationText && !params.location) {
-    queryValue = `${queryValue} in ${params.locationText}`;
-  }
+  const queryValue = buildFoodTextSearchQuery({
+    keyword: params.query,
+    locationText: params.locationText,
+    coords: params.location,
+  });
 
   if (queryKey) {
     args[queryKey] = queryValue;
@@ -587,7 +596,8 @@ const buildTextSearchArgs = (
       "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.googleMapsUri,places.types,places.primaryType,places.primaryTypeDisplayName,places.businessStatus";
   }
 
-  return args;
+  const includedTypes = includedTypesKey ? (args[includedTypesKey] as string[] | string) : undefined;
+  return { args, query: queryValue, includedTypes };
 };
 
 const isUnknownToolError = (err: unknown): boolean => {
@@ -991,18 +1001,27 @@ const recommendInternal = async (
         let responseMessage: string | undefined;
         let usedRadiusMeters = baseRadiusMeters;
         let supportsNextPageToken = false;
-        const selectedTool = locationCoords
+        const preferTextSearch =
+          Boolean(locationText) ||
+          hasExplicitLocationPhrase(context.rawMessage ?? args.query);
+        const preferredTool = preferTextSearch
+          ? resolvedTools.textSearch
+          : locationCoords
+            ? resolvedTools.nearbySearch
+            : resolvedTools.textSearch;
+        const fallbackTool = preferTextSearch
           ? resolvedTools.nearbySearch
           : resolvedTools.textSearch;
-        if (locationCoords && !resolvedTools.nearbySearch) {
+        const searchTool =
+          preferredTool ??
+          fallbackTool ??
+          selectSearchTool(resolvedTools, { hasCoordinates: Boolean(locationCoords) }).tool;
+        if (locationCoords && !searchTool) {
           return buildProviderFallbackResult({
             errorMessage: "Nearby search is temporarily unavailable.",
             providerName: "MCP",
           });
         }
-        const searchTool =
-          selectedTool ??
-          selectSearchTool(resolvedTools, { hasCoordinates: Boolean(locationCoords) }).tool;
         if (searchTool) {
           supportsNextPageToken = Boolean(
             matchSchemaKey(searchTool.inputSchema, [
@@ -1023,28 +1042,47 @@ const recommendInternal = async (
             try {
               let payload: unknown;
               if (searchTool.name === resolvedTools.textSearch?.name) {
-                payload = await callTool(
-                  searchTool,
+                const { args: textArgs, query: textQuery, includedTypes } =
                   buildTextSearchArgs(searchTool, {
                     query: keyword,
                     locationText,
                     location: locationCoords,
-                    radiusMeters: radiusMeters,
+                    radiusMeters,
                     nextPageToken: supportsNextPageToken ? nextPageToken : undefined,
                     maxResultCount,
-                  }),
-                );
-              } else {
-                const { args: nearbyArgs, logKeys, keywordOmitted } = buildNearbySearchArgs(
-                  searchTool,
+                  });
+                logger.info(
                   {
+                    requestId: context.requestId,
+                    selectedToolName: searchTool.name,
+                    usedMode: "text",
+                    query: textQuery,
+                    includedTypes,
+                    radiusMeters,
+                  },
+                  "MCP search request",
+                );
+                payload = await callTool(searchTool, textArgs);
+              } else {
+                const { args: nearbyArgs, logKeys, keywordOmitted, includedTypes } =
+                  buildNearbySearchArgs(searchTool, {
                     lat: locationCoords.lat,
                     lng: locationCoords.lng,
                     radiusMeters,
                     keyword,
                     nextPageToken: supportsNextPageToken ? nextPageToken : undefined,
                     maxResultCount,
+                  });
+                logger.info(
+                  {
+                    requestId: context.requestId,
+                    selectedToolName: searchTool.name,
+                    usedMode: "nearby",
+                    keyword,
+                    includedTypes,
+                    radiusMeters,
                   },
+                  "MCP search request",
                 );
                 if (keywordOmitted) {
                   logger.info(
