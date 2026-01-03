@@ -24,6 +24,7 @@ export type LlmResponse = {
 type CallLlmInput = {
   messages: LlmMessage[];
   tools?: ToolSchema[];
+  toolsDisabled?: boolean;
   settings: {
     llmModel: string;
     llmSystemPrompt: string;
@@ -57,6 +58,7 @@ const parseToolArguments = (raw: unknown): Record<string, unknown> => {
 export const callOpenAI = async ({
   messages,
   tools,
+  toolsDisabled = false,
   settings,
   requestId,
   timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -102,14 +104,19 @@ export const callOpenAI = async ({
       : [{ role: "system", content: settings.llmSystemPrompt }, ...messages];
   const normalizedVerbosity = normalizeVerbosity(settings.verbosity) ?? "medium";
 
-  const body = {
+  const body: Record<string, unknown> = {
     model,
-    tool_choice: "auto",
-    tools,
     input,
     reasoning: { effort: settings.reasoningEffort },
     text: { verbosity: normalizedVerbosity },
   };
+
+  if (!toolsDisabled) {
+    body.tool_choice = "auto";
+    if (tools) {
+      body.tools = tools;
+    }
+  }
 
   try {
     const response = await fetch(`${OPENAI_BASE_URL}/responses`, {
