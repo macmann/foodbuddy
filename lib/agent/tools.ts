@@ -422,11 +422,6 @@ const buildNearbySearchArgs = (
   ]);
   const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
   const fieldMaskKey = matchSchemaKey(schema, ["fieldmask", "field_mask", "fields"]);
-  const includedTypesKey = matchSchemaKey(schema, [
-    "includedtypes",
-    "included_types",
-    "includetypes",
-  ]);
 
   if (hasSchemaProperty(schema, "location") && (!latKey || !lngKey)) {
     args.location = { lat: params.lat, lng: params.lng };
@@ -527,6 +522,11 @@ const buildTextSearchArgs = (
   ]);
   const maxResultsKey = matchSchemaKey(schema, ["maxresultcount", "maxresults", "limit"]);
   const fieldMaskKey = matchSchemaKey(schema, ["fieldmask", "field_mask", "fields"]);
+  const includedTypesKey = matchSchemaKey(schema, [
+    "includedtypes",
+    "included_types",
+    "includetypes",
+  ]);
 
   const supportsLocationBias =
     Boolean(locationBiasKey) ||
