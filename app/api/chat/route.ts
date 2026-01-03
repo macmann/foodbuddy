@@ -34,7 +34,7 @@ import {
 import { listMcpTools, mcpCall } from "../../../lib/mcp/client";
 import { extractPlacesFromMcpResult } from "../../../lib/mcp/placesExtractor";
 import { resolveMcpPayloadFromResult } from "../../../lib/mcp/resultParser";
-import { resolveMcpTools, selectSearchTool } from "../../../lib/mcp/toolResolver";
+import { resolveMcpTools } from "../../../lib/mcp/toolResolver";
 import type { ToolDefinition } from "../../../lib/mcp/types";
 import type {
   ChatResponse,
@@ -497,6 +497,11 @@ const buildNearbySearchArgs = (
     "included_types",
     "includetypes",
   ]);
+  const excludedTypesKey = matchSchemaKey(schema, [
+    "excludedtypes",
+    "excluded_types",
+    "excludetypes",
+  ]);
 
   if (hasSchemaProperty(schema, "location") && (!latKey || !lngKey)) {
     args.location = { lat: params.lat, lng: params.lng };
@@ -522,7 +527,11 @@ const buildNearbySearchArgs = (
   }
 
   if (includedTypesKey && !args[includedTypesKey]) {
-    args[includedTypesKey] = buildFoodIncludedTypes(keywordValue);
+    args[includedTypesKey] = ["restaurant", "food"];
+  }
+
+  if (excludedTypesKey && !args[excludedTypesKey]) {
+    args[excludedTypesKey] = ["store", "lodging", "school", "shopping_mall"];
   }
 
   if (nextPageTokenKey && params.nextPageToken) {
@@ -588,9 +597,6 @@ const buildTextSearchArgs = (
   let queryValue = params.query;
   if (params.locationText && !params.location) {
     queryValue = `${queryValue} in ${params.locationText}`;
-  }
-  if (params.location && !supportsLocationBias) {
-    queryValue = `${queryValue} near ${params.location.lat},${params.location.lng}`;
   }
 
   if (queryKey) {
@@ -709,23 +715,6 @@ const geocodeLocationText = async ({
   return { coords: { lat: coords.lat, lng: coords.lng }, formattedAddress, error: null };
 };
 
-const selectMcpSearchTool = (
-  tools: ReturnType<typeof resolveMcpTools>,
-  keyword: string,
-): ToolDefinition | null => {
-  const trimmedKeyword = keyword.trim();
-  if (tools.nearbySearch) {
-    const nearbyKeywordKey = resolveKeywordSchemaKey(tools.nearbySearch.inputSchema);
-    if (nearbyKeywordKey || !trimmedKeyword) {
-      return tools.nearbySearch;
-    }
-  }
-  if (tools.textSearch) {
-    return tools.textSearch;
-  }
-  return tools.nearbySearch ?? null;
-};
-
 const searchPlacesWithMcp = async ({
   keyword,
   coords,
@@ -756,9 +745,14 @@ const searchPlacesWithMcp = async ({
   });
   const resolvedTools = resolveMcpTools(tools);
   const normalizedKeyword = buildFoodSearchQuery(keyword);
-  const selectedTool =
-    selectMcpSearchTool(resolvedTools, normalizedKeyword) ??
-    selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
+  const selectedTool = coords ? resolvedTools.nearbySearch : resolvedTools.textSearch;
+  if (coords && !resolvedTools.nearbySearch) {
+    return {
+      places: [],
+      message: "Places search is temporarily unavailable.",
+      nextPageToken: undefined,
+    };
+  }
   if (!selectedTool) {
     return {
       places: [],
@@ -859,14 +853,12 @@ const fetchMoreFromMcp = async ({
   });
   const resolvedTools = resolveMcpTools(tools);
   const normalizedQuery = buildFoodSearchQuery(session.lastQuery);
-  const selectedTool =
-    selectMcpSearchTool(resolvedTools, normalizedQuery) ??
-    selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
+  const selectedTool = resolvedTools.nearbySearch;
   if (!selectedTool) {
     return {
       places: [],
       nextPageToken: session.nextPageToken ?? undefined,
-      message: "No more results yet — try a new search.",
+      message: "Places search is temporarily unavailable.",
       usedRadius: session.radius,
     };
   }
@@ -901,30 +893,17 @@ const fetchMoreFromMcp = async ({
   };
 
   let payload: unknown;
-  if (selectedTool.name === resolvedTools.textSearch?.name) {
-    payload = await callTool(
-      selectedTool,
-      buildTextSearchArgs(selectedTool, {
-        query: normalizedQuery,
-        location: { lat: session.lat, lng: session.lng },
-        radiusMeters,
-        nextPageToken,
-        maxResultCount,
-      }),
-    );
-  } else {
-    payload = await callTool(
-      selectedTool,
-      buildNearbySearchArgs(selectedTool, {
-        lat: session.lat,
-        lng: session.lng,
-        radiusMeters,
-        keyword: normalizedQuery,
-        nextPageToken,
-        maxResultCount,
-      }),
-    );
-  }
+  payload = await callTool(
+    selectedTool,
+    buildNearbySearchArgs(selectedTool, {
+      lat: session.lat,
+      lng: session.lng,
+      radiusMeters,
+      keyword: normalizedQuery,
+      nextPageToken,
+      maxResultCount,
+    }),
+  );
 
   const { payload: parsedPayload } = resolveMcpPayloadFromResult(payload);
   const { places, successfull, error } = extractPlacesFromMcpResult(payload);

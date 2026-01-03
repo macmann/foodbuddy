@@ -449,21 +449,13 @@ const buildNearbySearchArgs = (
   }
 
   if (includedTypesKey) {
-    const includedTypes = buildFoodIncludedTypes(keywordValue);
-    args[includedTypesKey] = includedTypes;
+    args[includedTypesKey] = ["restaurant", "food"];
     logKeys.add("includedTypes");
   }
 
-  if (excludedTypesKey && params.excludedTypes !== undefined) {
-    const excludedValues = Array.isArray(params.excludedTypes)
-      ? params.excludedTypes.filter((item): item is string => typeof item === "string")
-      : typeof params.excludedTypes === "string"
-        ? [params.excludedTypes]
-        : [];
-    if (excludedValues.length > 0) {
-      args[excludedTypesKey] = excludedValues;
-      logKeys.add("excludedTypes");
-    }
+  if (excludedTypesKey) {
+    args[excludedTypesKey] = ["store", "lodging", "school", "shopping_mall"];
+    logKeys.add("excludedTypes");
   }
 
   if (nextPageTokenKey && params.nextPageToken) {
@@ -536,9 +528,6 @@ const buildTextSearchArgs = (
   let queryValue = params.query;
   if (params.locationText && !params.location) {
     queryValue = `${queryValue} in ${params.locationText}`;
-  }
-  if (params.location && !supportsLocationBias) {
-    queryValue = `${queryValue} near ${params.location.lat},${params.location.lng}`;
   }
 
   if (queryKey) {
@@ -1002,32 +991,18 @@ const recommendInternal = async (
         let responseMessage: string | undefined;
         let usedRadiusMeters = baseRadiusMeters;
         let supportsNextPageToken = false;
-        const nearbyKeywordKey = resolvedTools.nearbySearch
-          ? resolveKeywordSchemaKey(resolvedTools.nearbySearch.inputSchema)
-          : undefined;
-        const shouldPreferTextSearch =
-          Boolean(keyword) &&
-          Boolean(resolvedTools.textSearch) &&
-          Boolean(resolvedTools.nearbySearch) &&
-          !nearbyKeywordKey;
-        if (shouldPreferTextSearch) {
-          logger.info(
-            {
-              requestId: context.requestId,
-              provider: "MCP",
-              tool: resolvedTools.textSearch?.name,
-              keyword,
-              nearbySchemaKeys: getSchemaProperties(
-                resolvedTools.nearbySearch?.inputSchema,
-              ),
-            },
-            "MCP nearby search lacks keyword field; using text search",
-          );
+        const selectedTool = locationCoords
+          ? resolvedTools.nearbySearch
+          : resolvedTools.textSearch;
+        if (locationCoords && !resolvedTools.nearbySearch) {
+          return buildProviderFallbackResult({
+            errorMessage: "Nearby search is temporarily unavailable.",
+            providerName: "MCP",
+          });
         }
-        const selectedTool = selectSearchTool(resolvedTools, { hasCoordinates: true }).tool;
-        const searchTool = shouldPreferTextSearch
-          ? resolvedTools.textSearch ?? selectedTool
-          : selectedTool;
+        const searchTool =
+          selectedTool ??
+          selectSearchTool(resolvedTools, { hasCoordinates: Boolean(locationCoords) }).tool;
         if (searchTool) {
           supportsNextPageToken = Boolean(
             matchSchemaKey(searchTool.inputSchema, [
