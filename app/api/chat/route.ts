@@ -766,8 +766,8 @@ const searchPlacesWithMcp = async ({
 
   const message =
     normalized.length > 0
-      ? "Here are a few places you might like."
-      : "I couldn’t find food places for that. Try a different keyword (e.g., 'hotpot', 'noodle', 'dim sum').";
+      ? "Here are a few nearby food places you might like."
+      : "I couldn’t find food places nearby. Try a different keyword.";
 
   return {
     places: normalized,
