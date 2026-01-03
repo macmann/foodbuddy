@@ -111,7 +111,7 @@ npm run start
 ### Render
 
 1. Create a new Web Service in Render and connect the repository.
-2. Set the build command to `npm install --include=dev && npm run build`.
+2. Set the build command to `npm ci && npm run db:generate && npm run build`.
 3. Set the start command to `npm run start`.
 4. Add required environment variables (for example, `DATABASE_URL`, Places provider settings,
    and any feature flags from `.env.example`).
@@ -120,8 +120,9 @@ npm run start
 **Render notes**
 
 - Ensure `DATABASE_URL` plus any `COMPOSIO_*` variables are set in the Render environment.
-- Render runs `npm start`, which applies `prisma migrate deploy` before starting the
-  Next.js standalone server.
+- `npm run start` runs Prisma migrations before starting the Next.js standalone server.
+- If `DATABASE_URL` is missing or points to localhost in production, startup will fail fast
+  with a clear error message.
 
 ## Troubleshooting
 
