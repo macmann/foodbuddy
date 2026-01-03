@@ -278,10 +278,15 @@ const sanitizeMessage = (message: string | null | undefined, fallback: string) =
   if (!trimmed) {
     return fallback;
   }
-  const looksLikeJson = trimmed.startsWith("{") || trimmed.startsWith("[");
+  const looksLikeJson =
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("[") ||
+    /"\s*[^"]+"\s*:/.test(trimmed) ||
+    /'\s*[^']+'\s*:/.test(trimmed);
   const looksLikeStack =
     /traceback|stack trace|stacktrace/i.test(trimmed) || /\n\s*at\s+\S+\s*\(/.test(trimmed);
-  if (looksLikeJson || looksLikeStack) {
+  const mentionsLogs = /\blogs\b/i.test(trimmed);
+  if (looksLikeJson || looksLikeStack || mentionsLogs) {
     return fallback;
   }
   return trimmed;
@@ -299,6 +304,9 @@ const stripMcpLogs = (message: string | null | undefined) => {
     .filter((line) => !/^logs?\s*[:=]/i.test(line.trim()));
   return filteredLines.join("\n").trim();
 };
+
+const cleanUserMessage = (input: string | null | undefined, fallback: string) =>
+  sanitizeMessage(stripMcpLogs(input), fallback);
 
 const followUpIntentRegex = /show more|more options|next|another|refine/i;
 
@@ -946,8 +954,8 @@ const buildAgentResponse = ({
     ? "Here are a few places you might like."
     : "Tell me a neighborhood or enable location so I can find nearby places.";
   const errorFallback = "Sorry, something went wrong while finding places.";
-  const message = sanitizeMessage(
-    stripMcpLogs(agentMessage),
+  const message = cleanUserMessage(
+    agentMessage,
     resolvedStatus === "error" ? errorFallback : baseMessage,
   );
   if (debugEnabled && errorMessage) {
@@ -1115,11 +1123,16 @@ export async function POST(request: Request) {
       nextPageToken: followUp.nextPageToken ?? null,
     });
 
+    const followUpFallbackMessage =
+      followUp.places.length > 0
+        ? "Here are more places you might like."
+        : "No more results yet — try a new search.";
+
     return respondChat(
       200,
       buildChatResponse({
         status: "ok",
-        message: followUp.message,
+        message: cleanUserMessage(followUp.message, followUpFallbackMessage),
         places: followUp.places,
         sessionId: storedSession.sessionId,
         nextPageToken: followUp.nextPageToken,
@@ -1205,11 +1218,16 @@ export async function POST(request: Request) {
       });
 
       const confirmMessage = `Got it — searching near ${resolvedLocationLabel}…`;
+      const searchFallbackMessage =
+        searchResult.places.length > 0
+          ? "Here are a few places you might like."
+          : "I couldn’t find food places for that. Try a different keyword (e.g., 'hotpot', 'noodle', 'dim sum').";
+      const searchMessage = cleanUserMessage(searchResult.message, searchFallbackMessage);
       return respondChat(
         200,
         buildChatResponse({
           status: "ok",
-          message: `${confirmMessage} ${searchResult.message}`,
+          message: `${confirmMessage} ${searchMessage}`,
           places: searchResult.places,
           sessionId,
           nextPageToken: searchResult.nextPageToken,
@@ -1242,11 +1260,16 @@ export async function POST(request: Request) {
       nextPageToken: searchResult.nextPageToken ?? null,
     });
 
+    const searchFallbackMessage =
+      searchResult.places.length > 0
+        ? "Here are a few places you might like."
+        : "I couldn’t find food places for that. Try a different keyword (e.g., 'hotpot', 'noodle', 'dim sum').";
+
     return respondChat(
       200,
       buildChatResponse({
         status: "ok",
-        message: searchResult.message,
+        message: cleanUserMessage(searchResult.message, searchFallbackMessage),
         places: searchResult.places,
         sessionId,
         nextPageToken: searchResult.nextPageToken,
