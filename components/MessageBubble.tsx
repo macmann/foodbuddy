@@ -55,11 +55,19 @@ export default function MessageBubble({ message, children, onRetry }: MessageBub
           isUser
             ? "bg-slate-900 text-white"
             : message.error
-              ? "bg-rose-50 text-rose-700"
-              : "bg-slate-100 text-slate-900"
+              ? "bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-200"
+              : "bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-slate-100"
         }`}
       >
-        {displayContent && <p className="whitespace-pre-line">{displayContent}</p>}
+        {displayContent && (
+          <p
+            className={`whitespace-pre-line ${
+              isUser ? "text-white" : "text-slate-800 dark:text-slate-100"
+            }`}
+          >
+            {displayContent}
+          </p>
+        )}
         {children}
         {message.responseError && (
           <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
@@ -75,7 +83,9 @@ export default function MessageBubble({ message, children, onRetry }: MessageBub
             Try again
           </button>
         )}
-        <div className="mt-2 text-[11px] text-slate-400">{formatTime(message.createdAt)}</div>
+        <div className="mt-2 text-[11px] text-slate-400 dark:text-slate-500">
+          {formatTime(message.createdAt)}
+        </div>
       </div>
     </div>
   );
