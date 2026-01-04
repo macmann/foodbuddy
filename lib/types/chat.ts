@@ -23,5 +23,6 @@ export type ChatResponse = {
   meta?: {
     sessionId?: string;
     nextPageToken?: string;
+    needs_location?: boolean;
   };
 };

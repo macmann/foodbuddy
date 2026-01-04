@@ -49,3 +49,25 @@ test("fallbackExtractKeyword prefers known cuisine keywords", () => {
 test("fallbackExtractKeyword trims stopwords", () => {
   assert.equal(fallbackExtractKeyword("find food"), "food");
 });
+
+test("parseLocationWithLLM fallback captures explicit location text", async () => {
+  const result = await parseLocationWithLLM(
+    {
+      message: "i m near Thanlyin, i want noodle place",
+      requestId: "test-request",
+    },
+    {
+      getSettings: async () => ({
+        llmEnabled: false,
+        llmProvider: "openai",
+        llmModel: "gpt-5-mini",
+        llmSystemPrompt: "system",
+        reasoningEffort: "low",
+        verbosity: "low",
+      }),
+    },
+  );
+
+  assert.equal(result.location_text, "Thanlyin");
+  assert.equal(result.use_device_location, false);
+});

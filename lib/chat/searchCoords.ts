@@ -15,12 +15,11 @@ type GeocodeLocationText = (
   ctx: GeocodeContext,
 ) => Promise<GeocodeResult>;
 
-export type SearchCoordsSource = "request_coords" | "geocoded" | "none";
+export type SearchCoordsSource = "request_coords" | "geocoded_text" | "none";
 
 export type ResolveSearchCoordsInput = {
   reqCoords: { lat: number; lng: number } | null;
   locationText?: string;
-  sessionCoords: { lat: number; lng: number } | null;
   requestId: string;
   locale: string | null;
   countryHint: string | null;
@@ -93,14 +92,6 @@ export const normalizeRequestCoords = (
 export const resolveSearchCoords = async (
   input: ResolveSearchCoordsInput,
 ): Promise<ResolveSearchCoordsResult> => {
-  if (input.reqCoords) {
-    return {
-      searchCoords: input.reqCoords,
-      coordsSource: "request_coords",
-      geocodeFailed: false,
-    };
-  }
-
   if (input.locationText) {
     const geocodeResult = await input.geocode(input.locationText, {
       requestId: input.requestId,
@@ -119,7 +110,7 @@ export const resolveSearchCoords = async (
       geocodeResult.formattedAddress ?? input.locationText;
     return {
       searchCoords: geocodeResult.coords,
-      coordsSource: "geocoded",
+      coordsSource: "geocoded_text",
       resolvedLocationLabel,
       searchLocationText: resolvedLocationLabel,
       confirmMessage: `Got it — searching near ${resolvedLocationLabel}…`,
@@ -127,10 +118,10 @@ export const resolveSearchCoords = async (
     };
   }
 
-  if (input.sessionCoords) {
+  if (input.reqCoords) {
     return {
-      searchCoords: input.sessionCoords,
-      coordsSource: "none",
+      searchCoords: input.reqCoords,
+      coordsSource: "request_coords",
       geocodeFailed: false,
     };
   }
