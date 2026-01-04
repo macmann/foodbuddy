@@ -1,5 +1,11 @@
 import { logger } from "../logger";
-import { buildFoodIncludedTypes, buildFoodSearchQuery, buildFoodTextSearchQuery, filterFoodPlaces, hasExplicitLocationPhrase } from "../places/foodFilter";
+import {
+  buildFoodIncludedTypes,
+  buildFoodSearchQuery,
+  buildFoodTextSearchQuery,
+  filterFoodPlaces,
+  hasExplicitLocationPhrase,
+} from "../places/foodFilter";
 import { filterByMaxDistance } from "../geo/safetyNet";
 import { haversineMeters } from "../reco/scoring";
 import { listMcpTools, mcpCall } from "../mcp/client";
@@ -7,6 +13,10 @@ import { extractPlacesFromMcpResult } from "../mcp/placesExtractor";
 import { resolveMcpPayloadFromResult } from "../mcp/resultParser";
 import { resolveMcpTools } from "../mcp/toolResolver";
 import { normalizeMcpPlace } from "../places/normalizeMcpPlace";
+import {
+  rankMcpPlacesByRelevance,
+  type RelevanceRankerDeps,
+} from "./relevanceRanker";
 import type { ToolDefinition } from "../mcp/types";
 import type { RecommendationCardData } from "../types/chat";
 
@@ -390,6 +400,7 @@ type McpPlacesSearchResult = {
   places: RecommendationCardData[];
   message: string;
   nextPageToken?: string;
+  assistantMessage?: string;
 };
 
 export const searchPlacesWithMcp = async ({
@@ -401,6 +412,7 @@ export const searchPlacesWithMcp = async ({
   distanceRetryAttempted = false,
   forceNearbySearch = false,
   placeTypes,
+  relevanceRankerDeps,
 }: {
   keyword: string;
   coords: { lat: number; lng: number };
@@ -410,6 +422,7 @@ export const searchPlacesWithMcp = async ({
   distanceRetryAttempted?: boolean;
   forceNearbySearch?: boolean;
   placeTypes?: string[];
+  relevanceRankerDeps?: RelevanceRankerDeps;
 }): Promise<McpPlacesSearchResult> => {
   const mcpUrl = (process.env.COMPOSIO_MCP_URL ?? "").trim().replace(/^"+|"+$/g, "");
   const composioApiKey = process.env.COMPOSIO_API_KEY ?? "";
@@ -520,6 +533,18 @@ export const searchPlacesWithMcp = async ({
 
   let { payload: parsedPayload } = resolveMcpPayloadFromResult(payload);
   let { places, successfull, error } = extractPlacesFromMcp(payload);
+  const rankingResult = await rankMcpPlacesByRelevance(
+    {
+      query: queryBase,
+      places,
+      coords,
+      locationText,
+      radiusMeters,
+      requestId,
+    },
+    relevanceRankerDeps,
+  );
+  places = rankingResult.rankedPlaces;
   const isNearbySearch = selectedTool.name === resolvedTools.nearbySearch?.name;
   const hasTextSearchTool = Boolean(resolvedTools.textSearch);
   let usedFallback = false;
@@ -597,7 +622,9 @@ export const searchPlacesWithMcp = async ({
   if (successfull === false) {
     logger.warn({ requestId, error }, "MCP place search failed");
   }
-  const filtered = filterFoodPlaces(places, queryBase);
+  const filtered = filterFoodPlaces(places, queryBase, {
+    preserveOrder: rankingResult.usedRanker,
+  });
   let normalized = filtered
     .map((place) => normalizeMcpPlace(place, coords))
     .filter((place): place is RecommendationCardData => Boolean(place));
@@ -654,6 +681,7 @@ export const searchPlacesWithMcp = async ({
         distanceRetryAttempted: true,
         forceNearbySearch,
         placeTypes,
+        relevanceRankerDeps,
       });
       const retryMessage = locationText
         ? `I found places, but they seem far from ${locationText}. I’ll retry with a wider radius.`
@@ -758,5 +786,6 @@ export const searchPlacesWithMcp = async ({
     places: normalized,
     message,
     nextPageToken,
+    assistantMessage: rankingResult.assistantMessage,
   };
 };

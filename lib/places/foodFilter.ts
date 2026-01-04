@@ -203,6 +203,7 @@ const isFoodPlace = (place: Record<string, unknown>, query: string | undefined) 
 export const filterFoodPlaces = (
   places: Record<string, unknown>[],
   query: string | undefined,
+  options?: { preserveOrder?: boolean },
 ): Record<string, unknown>[] => {
   const scored = places.map((place) => {
     const types = getPlaceTypes(place);
@@ -218,8 +219,13 @@ export const filterFoodPlaces = (
     };
   });
 
-  return scored
-    .filter((item) => (item.hasTypes ? item.matchesIntent : true))
+  const filtered = scored.filter((item) => (item.hasTypes ? item.matchesIntent : true));
+
+  if (options?.preserveOrder) {
+    return filtered.map((item) => item.place);
+  }
+
+  return filtered
     .sort((a, b) => {
       if (a.hasTypes === b.hasTypes) {
         return 0;
