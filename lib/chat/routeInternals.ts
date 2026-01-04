@@ -189,6 +189,7 @@ export const buildNearbySearchArgs = (
     keyword?: string;
     nextPageToken?: string;
     maxResultCount?: number;
+    includedTypesOverride?: string[];
   },
 ): { args: Record<string, unknown>; includedTypes?: string[] | string } => {
   const schema = tool.inputSchema;
@@ -241,7 +242,7 @@ export const buildNearbySearchArgs = (
   }
 
   if (includedTypesKey && !args[includedTypesKey]) {
-    args[includedTypesKey] = ["restaurant"];
+    args[includedTypesKey] = params.includedTypesOverride ?? ["restaurant"];
   }
 
   if (excludedTypesKey && !args[excludedTypesKey]) {
@@ -275,6 +276,7 @@ export const buildTextSearchArgs = (
     nextPageToken?: string;
     maxResultCount?: number;
     radiusMeters?: number;
+    includedTypesOverride?: string[];
   },
 ): { args: Record<string, unknown>; query: string; includedTypes?: string[] | string } => {
   const schema = tool.inputSchema;
@@ -325,7 +327,7 @@ export const buildTextSearchArgs = (
   }
 
   if (includedTypesKey) {
-    args[includedTypesKey] = buildFoodIncludedTypes(params.query);
+    args[includedTypesKey] = params.includedTypesOverride ?? buildFoodIncludedTypes(params.query);
   }
 
   if (params.location && (latKey || lngKey)) {
@@ -397,6 +399,7 @@ export const searchPlacesWithMcp = async ({
   requestId,
   locationText,
   distanceRetryAttempted = false,
+  placeTypes,
 }: {
   keyword: string;
   coords: { lat: number; lng: number };
@@ -404,6 +407,7 @@ export const searchPlacesWithMcp = async ({
   requestId: string;
   locationText?: string;
   distanceRetryAttempted?: boolean;
+  placeTypes?: string[];
 }): Promise<McpPlacesSearchResult> => {
   const mcpUrl = (process.env.COMPOSIO_MCP_URL ?? "").trim().replace(/^"+|"+$/g, "");
   const composioApiKey = process.env.COMPOSIO_API_KEY ?? "";
@@ -462,6 +466,7 @@ export const searchPlacesWithMcp = async ({
                 radiusMeters,
                 locationText,
                 maxResultCount,
+                includedTypesOverride: placeTypes,
               });
               logger.info(
                 {
@@ -492,6 +497,7 @@ export const searchPlacesWithMcp = async ({
                 radiusMeters,
                 keyword: queryBase,
                 maxResultCount,
+                includedTypesOverride: placeTypes,
               });
               logger.info(
                 {
@@ -554,6 +560,7 @@ export const searchPlacesWithMcp = async ({
               locationText,
               radiusMeters,
               maxResultCount,
+              includedTypesOverride: placeTypes,
             });
             logger.info(
               {
@@ -643,6 +650,7 @@ export const searchPlacesWithMcp = async ({
         requestId,
         locationText,
         distanceRetryAttempted: true,
+        placeTypes,
       });
       const retryMessage = locationText
         ? `I found places, but they seem far from ${locationText}. I’ll retry with a wider radius.`
@@ -680,6 +688,7 @@ export const searchPlacesWithMcp = async ({
             locationText,
             radiusMeters,
             maxResultCount,
+            includedTypesOverride: placeTypes,
           });
           logger.info(
             {
