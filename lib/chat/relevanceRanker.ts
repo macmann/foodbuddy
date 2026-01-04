@@ -30,6 +30,12 @@ const rankingResponseSchema = z
   })
   .strict();
 
+const cuisineFilterResponseSchema = z
+  .object({
+    kept: z.array(z.union([z.string(), z.number()])),
+  })
+  .strict();
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
@@ -75,6 +81,53 @@ const extractLatLng = (payload: PlaceRecord): { lat?: number; lng?: number } => 
 
 const extractPlaceId = (place: PlaceRecord, index: number): string =>
   coerceString(place.placeId ?? place.place_id ?? place.id) ?? `index_${index}`;
+
+const extractPlaceTypes = (place: PlaceRecord): string[] => {
+  const types = Array.isArray(place.types)
+    ? place.types.filter((item): item is string => typeof item === "string")
+    : [];
+  const primaryType = typeof place.primaryType === "string" ? [place.primaryType] : [];
+  return [...types, ...primaryType];
+};
+
+const addHint = (hints: string[], value: unknown) => {
+  if (typeof value !== "string") {
+    return;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return;
+  }
+  hints.push(trimmed);
+};
+
+const extractMenuHints = (place: PlaceRecord): string[] => {
+  const hints: string[] = [];
+  if (Array.isArray(place.menuHighlights)) {
+    place.menuHighlights.forEach((item) => addHint(hints, item));
+  }
+  if (Array.isArray(place.menuItems)) {
+    place.menuItems.forEach((item) => {
+      if (typeof item === "string") {
+        addHint(hints, item);
+      } else if (isRecord(item)) {
+        addHint(hints, item.name ?? item.title ?? item.text);
+      }
+    });
+  }
+  if (isRecord(place.editorialSummary)) {
+    addHint(hints, place.editorialSummary.text ?? place.editorialSummary.description);
+  }
+  addHint(hints, place.description);
+  addHint(hints, place.summary);
+  if (Array.isArray(place.servesCuisine)) {
+    place.servesCuisine.forEach((item) => addHint(hints, item));
+  } else {
+    addHint(hints, place.servesCuisine);
+  }
+
+  return Array.from(new Set(hints)).slice(0, 3);
+};
 
 const buildFallbackRanking = ({
   places,
@@ -181,6 +234,132 @@ const buildRankingPrompt = ({
   };
 };
 
+const buildCuisineFilterPrompt = ({
+  query,
+  places,
+}: {
+  query: string;
+  places: PlaceRecord[];
+}) => {
+  const summarizedPlaces = places.map((place, index) => {
+    const name = coerceString(place.name ?? place.title);
+    const address = coerceString(
+      place.formattedAddress ??
+        place.shortFormattedAddress ??
+        place.formatted_address ??
+        place.vicinity ??
+        place.address,
+    );
+    const types = extractPlaceTypes(place);
+    const menuHints = extractMenuHints(place);
+
+    return {
+      index,
+      id: extractPlaceId(place, index),
+      name,
+      address,
+      types,
+      menu_hints: menuHints.length > 0 ? menuHints : null,
+    };
+  });
+
+  return {
+    cuisine_intent: query,
+    places: summarizedPlaces,
+  };
+};
+
+const filterPlacesByCuisineWithLlm = async ({
+  query,
+  places,
+  settings,
+  requestId,
+  callLlm,
+}: {
+  query: string;
+  places: PlaceRecord[];
+  settings: Awaited<ReturnType<typeof getLLMSettings>>;
+  requestId?: string;
+  callLlm: typeof callOpenAI;
+}): Promise<PlaceRecord[]> => {
+  if (!query.trim() || places.length === 0) {
+    return places;
+  }
+
+  const systemPrompt = [
+    "You are a filtering assistant for cuisine-specific restaurant recommendations.",
+    "Return JSON ONLY with this schema:",
+    '{ "kept": ["placeId or index"] }',
+    "Rules:",
+    "- Keep only places that match the cuisine intent.",
+    "- If a place might still match, keep it.",
+    "- Only use the provided place ids or indices. Do not invent new values.",
+    "- Indices are 0-based and correspond to the provided list order.",
+  ].join("\n");
+
+  const promptPayload = buildCuisineFilterPrompt({ query, places });
+
+  try {
+    const response = await callLlm({
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: JSON.stringify(promptPayload) },
+      ],
+      toolsDisabled: true,
+      settings: {
+        ...settings,
+        llmModel: settings.llmModel ?? "gpt-5-mini",
+        reasoningEffort: "low",
+        verbosity: "low",
+      },
+      requestId,
+      temperature: 0,
+    });
+
+    const parsedJson = normalizeResponseJson(response.assistantText);
+    const parsed = cuisineFilterResponseSchema.safeParse(parsedJson);
+    if (!parsed.success) {
+      logger.warn(
+        { requestId, error: parsed.error.flatten() },
+        "Cuisine filter schema mismatch; using original places",
+      );
+      return places;
+    }
+
+    const kept = parsed.data.kept;
+    const byId = new Map<string, PlaceRecord>();
+    places.forEach((place, index) => {
+      byId.set(extractPlaceId(place, index), place);
+    });
+
+    const filtered: PlaceRecord[] = [];
+    const seen = new Set<PlaceRecord>();
+    kept.forEach((entry) => {
+      if (typeof entry === "number") {
+        const index = Math.trunc(entry);
+        if (index >= 0 && index < places.length) {
+          const place = places[index];
+          if (place && !seen.has(place)) {
+            filtered.push(place);
+            seen.add(place);
+          }
+        }
+        return;
+      }
+      const place = byId.get(entry);
+      if (place && !seen.has(place)) {
+        filtered.push(place);
+        seen.add(place);
+      }
+    });
+
+    return filtered;
+  } catch (err) {
+    logger.warn({ err, requestId }, "Cuisine filter LLM call failed; using original places");
+    return places;
+  }
+};
+
 const buildRankedList = ({
   places,
   order,
@@ -252,15 +431,14 @@ export const rankMcpPlacesByRelevance = async (
   },
   deps: RelevanceRankerDeps = {},
 ): Promise<RelevanceRankerResult> => {
-  const fallbackPlaces = buildFallbackRanking({
-    places,
-    query,
-    coords,
-    radiusMeters,
-    maxResults,
-  });
-
   if (places.length === 0) {
+    const fallbackPlaces = buildFallbackRanking({
+      places,
+      query,
+      coords,
+      radiusMeters,
+      maxResults,
+    });
     return { rankedPlaces: fallbackPlaces, usedRanker: false };
   }
 
@@ -269,8 +447,36 @@ export const rankMcpPlacesByRelevance = async (
     settings = await (deps.getSettings ?? getLLMSettings)();
   } catch (err) {
     logger.warn({ err, requestId }, "Failed to load LLM settings for relevance ranker");
+    const fallbackPlaces = buildFallbackRanking({
+      places,
+      query,
+      coords,
+      radiusMeters,
+      maxResults,
+    });
     return { rankedPlaces: fallbackPlaces, usedRanker: false };
   }
+
+  const llmAvailable = settings.llmEnabled && (!!deps.callLlm || !!process.env.OPENAI_API_KEY);
+  const canCallLlm = deps.callLlm ?? callOpenAI;
+  let cuisineFilteredPlaces = places;
+  if (llmAvailable) {
+    cuisineFilteredPlaces = await filterPlacesByCuisineWithLlm({
+      query,
+      places,
+      settings,
+      requestId,
+      callLlm: canCallLlm,
+    });
+  }
+
+  const fallbackPlaces = buildFallbackRanking({
+    places: cuisineFilteredPlaces,
+    query,
+    coords,
+    radiusMeters,
+    maxResults,
+  });
 
   const rankingEnabled =
     settings.llmEnabled && process.env.LLM_RELEVANCE_RANKING_ENABLED === "true";
@@ -278,7 +484,7 @@ export const rankMcpPlacesByRelevance = async (
     return { rankedPlaces: fallbackPlaces, usedRanker: false };
   }
 
-  if (!deps.callLlm && !process.env.OPENAI_API_KEY) {
+  if (!llmAvailable) {
     logger.warn({ requestId }, "LLM relevance ranker disabled; missing OPENAI_API_KEY");
     return { rankedPlaces: fallbackPlaces, usedRanker: false };
   }
@@ -294,10 +500,15 @@ export const rankMcpPlacesByRelevance = async (
     "- Keep rationale short (max 1 sentence).",
   ].join("\n");
 
-  const promptPayload = buildRankingPrompt({ query, locationText, coords, places });
+  const promptPayload = buildRankingPrompt({
+    query,
+    locationText,
+    coords,
+    places: cuisineFilteredPlaces,
+  });
 
   try {
-    const response = await (deps.callLlm ?? callOpenAI)({
+    const response = await canCallLlm({
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: JSON.stringify(promptPayload) },
@@ -324,7 +535,7 @@ export const rankMcpPlacesByRelevance = async (
     }
 
     const rankedPlaces = buildRankedList({
-      places,
+      places: cuisineFilteredPlaces,
       order: parsed.data.ranked,
       maxResults,
     });
