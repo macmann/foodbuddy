@@ -64,7 +64,7 @@ export const dynamic = "force-dynamic";
 const defaultTimeoutMs = 12_000;
 const extendedTimeoutMs = 25_000;
 const locationPromptMessage =
-  "Share GPS or type area/city (e.g., Yangon, Hlaing, Mandalay).";
+  "Please share your location or enable GPS (e.g., Yangon, Hlaing, Mandalay).";
 
 
 type ChatRequestBody = {
@@ -673,6 +673,7 @@ const buildChatResponse = ({
   userMessage,
   locationLabel,
   radiusMeters,
+  needsLocation,
 }: {
   status: ChatResponse["status"];
   message: string;
@@ -682,6 +683,7 @@ const buildChatResponse = ({
   userMessage?: string;
   locationLabel?: string;
   radiusMeters?: number;
+  needsLocation?: boolean;
 }): ChatResponse => ({
   status,
   message: (() => {
@@ -698,10 +700,11 @@ const buildChatResponse = ({
   })(),
   places,
   meta:
-    sessionId || nextPageToken
+    sessionId || nextPageToken || needsLocation
       ? {
           sessionId,
           nextPageToken,
+          needs_location: needsLocation || undefined,
         }
       : undefined,
 });
@@ -992,9 +995,7 @@ export async function POST(request: Request) {
     explicitLocationText: requestLocationText,
     requestId,
   });
-  const effectiveParse = reqCoords
-    ? { ...guarded, use_device_location: true }
-    : guarded;
+  const effectiveParse = guarded;
 
   logger.info(
     {
@@ -1027,15 +1028,25 @@ export async function POST(request: Request) {
     Array.isArray(effectiveParse.place_types) && effectiveParse.place_types.length > 0
       ? effectiveParse.place_types
       : undefined;
+  const explicitLocationText = effectiveParse.location_text?.trim() || undefined;
+  const explicitLocationPresent = Boolean(explicitLocationText);
 
-  const effectiveIntent =
-    reqCoords && effectiveParse.intent === "clarify" ? "nearby_search" : effectiveParse.intent;
-
-  if (effectiveIntent === "clarify") {
+  if (!explicitLocationPresent && !reqCoords) {
     await setPending(sessionId, {
       action: PENDING_ACTION_RECOMMEND,
       keyword,
     });
+    logger.info(
+      {
+        requestId,
+        explicitLocationPresent,
+        coordsSource: "none",
+        keyword,
+        latRounded: null,
+        lngRounded: null,
+      },
+      "Location resolution decision",
+    );
     return respondChat(
       200,
       buildChatResponse({
@@ -1046,17 +1057,10 @@ export async function POST(request: Request) {
         userMessage: body.message,
         locationLabel: locationText,
         radiusMeters: parsedRadius,
+        needsLocation: true,
       }),
     );
   }
-
-  const allowSessionLocation = locationEnabled || hasCoordinates;
-  const sessionCoords =
-    allowSessionLocation &&
-    typeof searchSession?.lastLat === "number" &&
-    typeof searchSession?.lastLng === "number"
-      ? { lat: searchSession.lastLat, lng: searchSession.lastLng }
-      : null;
 
   let searchCoords: { lat: number; lng: number } | null = null;
   let resolvedLocationLabel: string | undefined = locationText ?? undefined;
@@ -1073,8 +1077,7 @@ export async function POST(request: Request) {
 
   const resolvedSearchCoords = await resolveSearchCoords({
     reqCoords,
-    locationText: effectiveParse.location_text ?? undefined,
-    sessionCoords,
+    locationText: explicitLocationText,
     requestId,
     locale,
     countryHint,
@@ -1120,6 +1123,7 @@ export async function POST(request: Request) {
         userMessage: body.message,
         locationLabel: locationText,
         radiusMeters: parsedRadius,
+        needsLocation: true,
       }),
     );
   }
@@ -1134,13 +1138,13 @@ export async function POST(request: Request) {
   logger.info(
     {
       requestId,
-      keyword,
+      explicitLocationPresent,
       coordsSource,
-      radiusMeters: parsedRadius,
-      lat: Math.round(searchCoords.lat * 1000) / 1000,
-      lng: Math.round(searchCoords.lng * 1000) / 1000,
+      keyword,
+      latRounded: Math.round(searchCoords.lat * 1000) / 1000,
+      lngRounded: Math.round(searchCoords.lng * 1000) / 1000,
     },
-    "Final search params",
+    "Location resolution decision",
   );
 
   const searchResult = await searchPlacesWithMcp({

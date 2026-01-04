@@ -43,24 +43,18 @@ export const applyGuardrails = (
     location_text: locationText,
   };
 
-  if (hasCoords) {
+  if (next.location_text) {
+    next = {
+      ...next,
+      use_device_location: false,
+    };
+  } else if (hasCoords) {
     next = {
       ...next,
       use_device_location: true,
     };
     if (next.intent === "clarify") {
       next = { ...next, intent: "nearby_search" };
-    }
-  }
-
-  if (next.location_text && next.confidence < 0.6) {
-    discardedLocationReason = "low_confidence_location";
-    next = {
-      ...next,
-      location_text: undefined,
-    };
-    if (!hasCoords) {
-      next = { ...next, intent: "clarify", use_device_location: false };
     }
   }
 

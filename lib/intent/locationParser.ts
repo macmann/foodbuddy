@@ -36,7 +36,7 @@ const parserSystemPrompt = [
   "Rules:",
   "- Only set location_text if explicitly mentioned by the user (e.g., 'in X', 'near X').",
   "- Do NOT output generic words as location_text (place/here/nearby/around/my area/area/this area).",
-  "- If device coords are available, set use_device_location=true.",
+  "- If device coords are available and no explicit location is mentioned, set use_device_location=true.",
   "- Extract the user's POI keyword(s) to query (e.g., ramen, noodle, coffee).",
   '- Choose place_types based on query: food => ["restaurant"], coffee/tea => ["cafe"], else ["point_of_interest"].',
 ].join("\n");
@@ -87,6 +87,23 @@ const stopwords = new Set([
   "places",
 ]);
 
+const LOCATION_DENYLIST = new Set([
+  "place",
+  "places",
+  "here",
+  "nearby",
+  "around",
+  "my area",
+  "area",
+  "this area",
+]);
+
+const normalizeLocationToken = (value: string) =>
+  value.toLowerCase().replace(/[.,]/g, "").trim();
+
+const isGenericLocation = (value: string) =>
+  LOCATION_DENYLIST.has(normalizeLocationToken(value));
+
 export const fallbackExtractKeyword = (message: string): string => {
   const normalized = message.toLowerCase();
   const primaryMatch = primaryFallbackKeywords.find((keyword) =>
@@ -106,13 +123,26 @@ export const fallbackExtractKeyword = (message: string): string => {
   return tokens.slice(0, 2).join(" ");
 };
 
+const fallbackExtractLocation = (message: string): string | undefined => {
+  const match = message.match(/\b(?:near|in)\s+([^,.\n]+)/i);
+  const candidate = match?.[1]?.trim();
+  if (!candidate) {
+    return undefined;
+  }
+  if (isGenericLocation(candidate)) {
+    return undefined;
+  }
+  return candidate;
+};
+
 const buildFallbackParse = (input: LocationParserInput): LocationParse => {
   const query = fallbackExtractKeyword(input.message);
+  const locationText = fallbackExtractLocation(input.message);
   return {
-    intent: input.coords ? "nearby_search" : "clarify",
+    intent: input.coords || locationText ? "nearby_search" : "clarify",
     query,
-    location_text: undefined,
-    use_device_location: Boolean(input.coords),
+    location_text: locationText,
+    use_device_location: Boolean(input.coords) && !locationText,
     radius_m: input.lastRadiusM ?? 1500,
     place_types: fallbackPlaceTypes(query),
     confidence: 0.2,
