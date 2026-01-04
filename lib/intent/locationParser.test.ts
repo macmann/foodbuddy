@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseLocationWithLLM } from "./locationParser";
+import { fallbackExtractKeyword, parseLocationWithLLM } from "./locationParser";
 
 test("parseLocationWithLLM returns parsed query and location", async () => {
   const result = await parseLocationWithLLM(
@@ -36,4 +36,16 @@ test("parseLocationWithLLM returns parsed query and location", async () => {
   assert.equal(result.query, "noodle");
   assert.equal(result.location_text, "Yangon");
   assert.equal(result.use_device_location, false);
+});
+
+test("fallbackExtractKeyword prefers known cuisine keywords", () => {
+  assert.equal(
+    fallbackExtractKeyword("i m near Thanlyin, i want noodle place"),
+    "noodle",
+  );
+  assert.equal(fallbackExtractKeyword("nearby coffee"), "coffee");
+});
+
+test("fallbackExtractKeyword trims stopwords", () => {
+  assert.equal(fallbackExtractKeyword("find food"), "food");
 });

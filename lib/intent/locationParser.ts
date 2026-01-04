@@ -1,7 +1,6 @@
 import { randomUUID } from "crypto";
 import { callOpenAI, type LlmMessage } from "../agent/openaiClient";
 import { logger } from "../logger";
-import { parseQuery } from "../reco/engine";
 import { getLLMSettings } from "../settings/llm";
 import { locationParseSchema, type LocationParse } from "./locationParseSchema";
 
@@ -53,20 +52,64 @@ const fallbackPlaceTypes = (query: string): string[] => {
   return ["point_of_interest"];
 };
 
-const inferKeyword = (message: string): string => {
-  const parsed = parseQuery(message);
-  const keyword = parsed.keyword?.trim();
-  if (keyword && keyword.length > 0) {
-    return keyword;
+const primaryFallbackKeywords = [
+  "noodle",
+  "ramen",
+  "pizza",
+  "coffee",
+  "tea",
+  "bbq",
+  "burger",
+];
+
+const stopwords = new Set([
+  "i",
+  "im",
+  "i'm",
+  "me",
+  "my",
+  "near",
+  "nearby",
+  "around",
+  "want",
+  "need",
+  "looking",
+  "find",
+  "show",
+  "please",
+  "a",
+  "an",
+  "the",
+  "to",
+  "for",
+  "of",
+  "place",
+  "places",
+]);
+
+export const fallbackExtractKeyword = (message: string): string => {
+  const normalized = message.toLowerCase();
+  const primaryMatch = primaryFallbackKeywords.find((keyword) =>
+    normalized.includes(keyword),
+  );
+  if (primaryMatch) {
+    return primaryMatch;
   }
-  const cleaned = message.trim();
-  return cleaned.length > 0 ? cleaned : "restaurant";
+  const tokens = normalized
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0 && !stopwords.has(token));
+  if (tokens.length === 0) {
+    return "restaurant";
+  }
+  return tokens.slice(0, 2).join(" ");
 };
 
 const buildFallbackParse = (input: LocationParserInput): LocationParse => {
-  const query = inferKeyword(input.message);
+  const query = fallbackExtractKeyword(input.message);
   return {
-    intent: "nearby_search",
+    intent: input.coords ? "nearby_search" : "clarify",
     query,
     location_text: undefined,
     use_device_location: Boolean(input.coords),
@@ -125,7 +168,9 @@ export const parseLocationWithLLM = async (
     { role: "user", content: JSON.stringify(payload) },
   ];
 
-  const timeoutMs = Number(process.env.LOCATION_PARSER_TIMEOUT_MS ?? 3500);
+  const timeoutMs = Number(process.env.LOCATION_PARSER_TIMEOUT_MS ?? 5000);
+  const parserController = new AbortController();
+  const parserTimeout = setTimeout(() => parserController.abort(), timeoutMs);
   try {
     const caller = deps.callLlm ?? callOpenAI;
     const response = await caller({
@@ -139,6 +184,7 @@ export const parseLocationWithLLM = async (
       },
       requestId,
       timeoutMs,
+      signal: parserController.signal,
       temperature: 0.2,
     });
 
@@ -170,7 +216,17 @@ export const parseLocationWithLLM = async (
 
     return normalized;
   } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      const fallback = buildFallbackParse(input);
+      logger.warn(
+        { err, requestId, keyword: fallback.query },
+        "Location parser aborted; fallback keyword",
+      );
+      return fallback;
+    }
     logger.warn({ err, requestId }, "Location parser failed; using fallback");
     return buildFallbackParse(input);
+  } finally {
+    clearTimeout(parserTimeout);
   }
 };
