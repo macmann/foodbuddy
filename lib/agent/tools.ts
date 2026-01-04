@@ -407,8 +407,9 @@ const buildNearbySearchArgs = (
     logKeys.add(keywordKey);
   }
 
-  if (includedTypesKey) {
-    args[includedTypesKey] = ["restaurant"];
+  const fallbackIncludedTypes = buildFoodIncludedTypes(params.keyword);
+  if (includedTypesKey && fallbackIncludedTypes) {
+    args[includedTypesKey] = fallbackIncludedTypes;
     logKeys.add("includedTypes");
   }
 
@@ -497,8 +498,9 @@ const buildTextSearchArgs = (
     args.query = queryValue;
   }
 
-  if (includedTypesKey) {
-    args[includedTypesKey] = buildFoodIncludedTypes(params.query);
+  const fallbackIncludedTypes = buildFoodIncludedTypes(params.query);
+  if (includedTypesKey && fallbackIncludedTypes) {
+    args[includedTypesKey] = fallbackIncludedTypes;
   }
 
   const radiusValue =

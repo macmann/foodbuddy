@@ -108,7 +108,7 @@ export const narratePlacesWithLLM = async ({
     return sanitizeOutput(response.assistantText, fallback);
   } catch (err) {
     if (isAbortError(err)) {
-      logger.warn({ err, requestId }, "Narration LLM call timed out");
+      logger.warn({ err, requestId, timeoutMs }, "Narration LLM call timed out");
     } else {
       logger.warn({ err, requestId }, "Narration LLM call failed");
     }

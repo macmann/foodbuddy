@@ -2,6 +2,8 @@ const FOOD_PLACE_TYPES = ["restaurant", "meal_takeaway", "meal_delivery", "cafe"
 
 const OPTIONAL_FOOD_TYPES = ["meal_takeaway", "meal_delivery", "cafe"];
 
+const INCLUDED_TYPES = new Set(["restaurant", "bar", "cafe"]);
+
 const FOOD_INTENT_KEYWORDS = [
   "food",
   "restaurant",
@@ -89,6 +91,12 @@ export const hasFoodIntent = (query: string | undefined): boolean => {
   return containsAny(normalized, FOOD_INTENT_KEYWORDS);
 };
 
+const hasBarIntent = (query: string): boolean =>
+  /\b(bar|bars|pub|pubs|cocktail|brewery|taproom)\b/.test(query);
+
+const hasCafeIntent = (query: string): boolean =>
+  /\b(cafe|cafes|coffee|tea)\b/.test(query);
+
 export const buildFoodSearchQuery = (keyword: string): string => {
   const trimmed = keyword.trim();
   if (!trimmed) {
@@ -142,25 +150,39 @@ export const buildFoodTextSearchQuery = ({
   return intent;
 };
 
-export const buildFoodIncludedTypes = (keyword: string | undefined): string[] => {
-  const types = new Set<string>(["restaurant"]);
+export const buildFoodIncludedTypes = (
+  keyword: string | undefined,
+): string[] | undefined => {
   if (!keyword) {
-    return Array.from(types);
+    return undefined;
   }
-  const normalized = normalizeText(keyword);
-  if (normalized.includes("cafe") || normalized.includes("coffee") || normalized.includes("tea")) {
-    types.add("cafe");
+  const normalized = normalizeText(keyword).trim();
+  if (!normalized) {
+    return undefined;
   }
-  if (normalized.includes("bakery")) {
-    types.add("bakery");
+  if (hasBarIntent(normalized)) {
+    return ["bar"];
   }
-  if (normalized.includes("bar")) {
-    types.add("bar");
+  if (hasCafeIntent(normalized)) {
+    return ["cafe"];
   }
-  if (normalized.includes("takeaway") || normalized.includes("takeout")) {
-    types.add("meal_takeaway");
+  if (hasFoodIntent(normalized)) {
+    return ["restaurant"];
   }
-  return Array.from(types);
+  return undefined;
+};
+
+export const normalizeIncludedTypes = (
+  value: string[] | string | undefined,
+): string[] | undefined => {
+  if (!value) {
+    return undefined;
+  }
+  const items = Array.isArray(value) ? value : [value];
+  const normalized = items
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => INCLUDED_TYPES.has(item));
+  return normalized.length > 0 ? normalized : undefined;
 };
 
 const getPlaceTypes = (place: Record<string, unknown>): string[] => {

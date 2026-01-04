@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { callOpenAI, type LlmMessage } from "../agent/openaiClient";
 import { logger } from "../logger";
 import { getLLMSettings } from "../settings/llm";
+import { buildFoodIncludedTypes, normalizeIncludedTypes } from "../places/foodFilter";
 import { locationParseSchema, type LocationParse } from "./locationParseSchema";
 
 export type LocationParserInput = {
@@ -38,19 +39,11 @@ const parserSystemPrompt = [
   "- Do NOT output generic words as location_text (place/here/nearby/around/my area/area/this area).",
   "- If device coords are available and no explicit location is mentioned, set use_device_location=true.",
   "- Extract the user's POI keyword(s) to query (e.g., ramen, noodle, coffee).",
-  '- Choose place_types based on query: food => ["restaurant"], coffee/tea => ["cafe"], else ["point_of_interest"].',
+  '- Choose place_types based on query: food => ["restaurant"], coffee/tea => ["cafe"], bar => ["bar"], otherwise leave empty.',
 ].join("\n");
 
-const fallbackPlaceTypes = (query: string): string[] => {
-  const normalized = query.toLowerCase();
-  if (/(coffee|cafe|tea)/.test(normalized)) {
-    return ["cafe"];
-  }
-  if (/(restaurant|food|noodle|ramen|sushi|bbq|pizza|burger|hotpot|dim sum)/.test(normalized)) {
-    return ["restaurant"];
-  }
-  return ["point_of_interest"];
-};
+const fallbackPlaceTypes = (query: string): string[] | undefined =>
+  buildFoodIncludedTypes(query);
 
 const primaryFallbackKeywords = [
   "noodle",
@@ -104,6 +97,25 @@ const normalizeLocationToken = (value: string) =>
 const isGenericLocation = (value: string) =>
   LOCATION_DENYLIST.has(normalizeLocationToken(value));
 
+const isAbortError = (error: unknown) =>
+  error instanceof Error && error.name === "AbortError";
+
+export const sanitizeLocationText = (
+  value: string | null | undefined,
+): string | undefined => {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const withoutQuotes = trimmed.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "");
+  const withoutPunctuation = withoutQuotes.replace(/[?.,!;:]+$/g, "");
+  const collapsed = withoutPunctuation.replace(/\s+/g, " ").trim();
+  return collapsed.length > 0 ? collapsed : undefined;
+};
+
 export const fallbackExtractKeyword = (message: string): string => {
   const normalized = message.toLowerCase();
   const primaryMatch = primaryFallbackKeywords.find((keyword) =>
@@ -137,7 +149,7 @@ const fallbackExtractLocation = (message: string): string | undefined => {
 
 const buildFallbackParse = (input: LocationParserInput): LocationParse => {
   const query = fallbackExtractKeyword(input.message);
-  const locationText = fallbackExtractLocation(input.message);
+  const locationText = sanitizeLocationText(fallbackExtractLocation(input.message));
   return {
     intent: input.coords || locationText ? "nearby_search" : "clarify",
     query,
@@ -230,7 +242,8 @@ export const parseLocationWithLLM = async (
 
     const normalized = {
       ...parsed.data,
-      location_text: parsed.data.location_text ?? undefined,
+      location_text: sanitizeLocationText(parsed.data.location_text),
+      place_types: normalizeIncludedTypes(parsed.data.place_types ?? undefined) ?? undefined,
     } satisfies LocationParse;
 
     logger.info(
@@ -246,10 +259,10 @@ export const parseLocationWithLLM = async (
 
     return normalized;
   } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") {
+    if (isAbortError(err)) {
       const fallback = buildFallbackParse(input);
       logger.warn(
-        { err, requestId, keyword: fallback.query },
+        { err, requestId, keyword: fallback.query, timeoutMs },
         "Location parser aborted; fallback keyword",
       );
       return fallback;

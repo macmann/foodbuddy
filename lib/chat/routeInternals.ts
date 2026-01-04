@@ -5,6 +5,7 @@ import {
   buildFoodTextSearchQuery,
   filterFoodPlaces,
   hasExplicitLocationPhrase,
+  normalizeIncludedTypes,
 } from "../places/foodFilter";
 import { filterByMaxDistance } from "../geo/safetyNet";
 import { haversineMeters } from "../reco/scoring";
@@ -251,8 +252,10 @@ export const buildNearbySearchArgs = (
     args[keywordKey] = keywordValue;
   }
 
-  if (includedTypesKey && !args[includedTypesKey]) {
-    args[includedTypesKey] = params.includedTypesOverride ?? ["restaurant"];
+  const normalizedIncludedTypesOverride = normalizeIncludedTypes(params.includedTypesOverride);
+  const fallbackIncludedTypes = normalizedIncludedTypesOverride ?? buildFoodIncludedTypes(params.keyword);
+  if (includedTypesKey && fallbackIncludedTypes && !args[includedTypesKey]) {
+    args[includedTypesKey] = fallbackIncludedTypes;
   }
 
   if (excludedTypesKey && !args[excludedTypesKey]) {
@@ -336,8 +339,10 @@ export const buildTextSearchArgs = (
     args.query = queryValue;
   }
 
-  if (includedTypesKey) {
-    args[includedTypesKey] = params.includedTypesOverride ?? buildFoodIncludedTypes(params.query);
+  const normalizedIncludedTypesOverride = normalizeIncludedTypes(params.includedTypesOverride);
+  const fallbackIncludedTypes = normalizedIncludedTypesOverride ?? buildFoodIncludedTypes(params.query);
+  if (includedTypesKey && fallbackIncludedTypes) {
+    args[includedTypesKey] = fallbackIncludedTypes;
   }
 
   if (params.location && (latKey || lngKey)) {

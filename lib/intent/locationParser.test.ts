@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { fallbackExtractKeyword, parseLocationWithLLM } from "./locationParser";
+import {
+  fallbackExtractKeyword,
+  parseLocationWithLLM,
+  sanitizeLocationText,
+} from "./locationParser";
 
 test("parseLocationWithLLM returns parsed query and location", async () => {
   const result = await parseLocationWithLLM(
@@ -70,4 +74,8 @@ test("parseLocationWithLLM fallback captures explicit location text", async () =
 
   assert.equal(result.location_text, "Thanlyin");
   assert.equal(result.use_device_location, false);
+});
+
+test("sanitizeLocationText trims trailing punctuation", () => {
+  assert.equal(sanitizeLocationText("thanlyin?"), "thanlyin");
 });

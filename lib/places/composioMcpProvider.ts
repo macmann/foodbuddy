@@ -1,6 +1,7 @@
 import "server-only";
 
 import { logger } from "../logger";
+import { buildFoodIncludedTypes, normalizeIncludedTypes } from "./foodFilter";
 import { invalidateMcpToolsCache, listMcpTools, mcpCall } from "../mcp/client";
 import { extractPlacesFromMcpResult } from "../mcp/placesExtractor";
 import { resolveMcpPayloadFromResult } from "../mcp/resultParser";
@@ -417,9 +418,12 @@ export class ComposioMcpProvider implements PlacesProvider {
       args[keywordKey] = params.keyword;
     }
 
-    const requestedIncludedTypes = normalizeStringArray(params.includedTypes);
+    const requestedIncludedTypes = normalizeIncludedTypes(
+      normalizeStringArray(params.includedTypes),
+    );
     const fallbackIncludedTypes =
-      requestedIncludedTypes ?? normalizeStringArray("restaurant");
+      requestedIncludedTypes ??
+      normalizeIncludedTypes(buildFoodIncludedTypes(params.keyword));
     if (includedTypesKey && fallbackIncludedTypes) {
       args[includedTypesKey] = fallbackIncludedTypes;
     } else if (typeKey && fallbackIncludedTypes) {
