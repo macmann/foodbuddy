@@ -38,6 +38,7 @@ import {
   filterFoodPlaces,
   hasExplicitLocationPhrase,
 } from "../../../lib/places/foodFilter";
+import { rankMcpPlacesByRelevance } from "../../../lib/chat/relevanceRanker";
 import { PENDING_ACTION_RECOMMEND } from "../../../lib/chat/recommendState";
 import { geocodeLocationText } from "../../../lib/intent/geocode";
 import { applyGuardrails } from "../../../lib/intent/locationGuardrails";
@@ -572,6 +573,14 @@ const fetchMoreFromMcp = async ({
 
   let { payload: parsedPayload } = resolveMcpPayloadFromResult(payload);
   let { places, successfull, error } = extractPlacesFromMcp(payload);
+  const rankingResult = await rankMcpPlacesByRelevance({
+    query: normalizedQuery,
+    places,
+    coords: { lat: session.lat, lng: session.lng },
+    radiusMeters,
+    requestId,
+  });
+  places = rankingResult.rankedPlaces;
   let retriedWithTextSearch = false;
   let usedFallback = false;
   const isNearbySearch = selectedTool.name === resolvedTools.nearbySearch?.name;
@@ -643,7 +652,9 @@ const fetchMoreFromMcp = async ({
       "MCP follow-up search failed",
     );
   }
-  const filtered = filterFoodPlaces(places, normalizedQuery);
+  const filtered = filterFoodPlaces(places, normalizedQuery, {
+    preserveOrder: rankingResult.usedRanker,
+  });
   const normalized = filtered
     .map((place) => normalizeMcpPlace(place, { lat: session.lat, lng: session.lng }))
     .filter((place): place is RecommendationCardData => Boolean(place));
@@ -663,6 +674,7 @@ const fetchMoreFromMcp = async ({
     nextPageToken: updatedNextPageToken,
     message,
     usedRadius: radiusMeters,
+    assistantMessage: rankingResult.assistantMessage,
   };
 };
 
@@ -955,16 +967,18 @@ export async function POST(request: Request) {
       followUp.places.length > 0
         ? "Here are more places you might like."
         : "No more results yet — try a new search.";
-    const followUpMessage = await buildNarratedMessage({
-      query: storedSession.lastQuery,
-      userMessage: body.message,
-      locationLabel: locationText,
-      places: followUp.places,
-      locale,
-      requestId,
-      timeoutMs: narrationTimeoutMs,
-      fallbackMessage: followUpFallbackMessage,
-    });
+    const followUpMessage = followUp.assistantMessage
+      ? safeUserMessage(followUp.assistantMessage, followUpFallbackMessage)
+      : await buildNarratedMessage({
+          query: storedSession.lastQuery,
+          userMessage: body.message,
+          locationLabel: locationText,
+          places: followUp.places,
+          locale,
+          requestId,
+          timeoutMs: narrationTimeoutMs,
+          fallbackMessage: followUpFallbackMessage,
+        });
 
     return respondChat(
       200,
@@ -1195,16 +1209,18 @@ export async function POST(request: Request) {
     searchResult.places.length > 0
       ? "Here are a few places you might like."
       : "I couldn’t find food places for that. Try a different keyword (e.g., 'hotpot', 'noodle', 'dim sum').";
-  const narratedMessage = await buildNarratedMessage({
-    query: keyword,
-    userMessage: body.message,
-    locationLabel: resolvedLocationLabel,
-    places: searchResult.places,
-    locale,
-    requestId,
-    timeoutMs: narrationTimeoutMs,
-    fallbackMessage: searchFallbackMessage,
-  });
+  const narratedMessage = searchResult.assistantMessage
+    ? safeUserMessage(searchResult.assistantMessage, searchFallbackMessage)
+    : await buildNarratedMessage({
+        query: keyword,
+        userMessage: body.message,
+        locationLabel: resolvedLocationLabel,
+        places: searchResult.places,
+        locale,
+        requestId,
+        timeoutMs: narrationTimeoutMs,
+        fallbackMessage: searchFallbackMessage,
+      });
 
   return respondChat(
     200,

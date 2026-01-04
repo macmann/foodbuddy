@@ -119,3 +119,121 @@ test("searchPlacesWithMcp retries with text search on nearby validation errors",
     resetExtractPlacesFromMcpResult();
   }
 });
+
+test("searchPlacesWithMcp uses relevance ranker and keeps mapsUrl/placeId", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalMcpUrl = process.env.COMPOSIO_MCP_URL;
+  const originalApiKey = process.env.COMPOSIO_API_KEY;
+  const originalRankFlag = process.env.LLM_RELEVANCE_RANKING_ENABLED;
+
+  try {
+    process.env.COMPOSIO_MCP_URL = "https://example.com";
+    process.env.COMPOSIO_API_KEY = "test-api-key";
+    process.env.LLM_RELEVANCE_RANKING_ENABLED = "true";
+
+    globalThis.fetch = (async (_input, init) => {
+      const body = init?.body ? JSON.parse(init.body.toString()) : null;
+      if (body?.method === "tools/list") {
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: {
+              tools: [
+                {
+                  name: "google_maps_places_nearby_search",
+                  inputSchema: {
+                    properties: {
+                      keyword: { type: "string" },
+                      latitude: { type: "number" },
+                      longitude: { type: "number" },
+                      radius_m: { type: "number" },
+                    },
+                  },
+                },
+              ],
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      if (body?.method === "tools/call") {
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: { results: [] },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      return new Response("Unexpected request", { status: 500 });
+    }) as typeof fetch;
+
+    setExtractPlacesFromMcpResult(() => ({
+      places: [
+        {
+          id: "place-1",
+          name: "Alpha",
+          location: { latitude: 1, longitude: 2 },
+          googleMapsUri: "https://maps.example.com/alpha",
+          types: ["restaurant"],
+        },
+        {
+          id: "place-2",
+          name: "Bravo",
+          location: { latitude: 1.01, longitude: 2.01 },
+          googleMapsUri: "https://maps.example.com/bravo",
+          types: ["restaurant"],
+        },
+      ],
+      successfull: true,
+    }));
+
+    const result = await searchPlacesWithMcp({
+      keyword: "sushi",
+      coords: { lat: 1, lng: 2 },
+      radiusMeters: 1000,
+      requestId: "test-request",
+      relevanceRankerDeps: {
+        getSettings: async () => ({
+          llmEnabled: true,
+          llmProvider: "openai",
+          llmModel: "gpt-5-mini",
+          llmSystemPrompt: "",
+          reasoningEffort: "low",
+          verbosity: "low",
+        }),
+        callLlm: async () => ({
+          assistantText: JSON.stringify({
+            ranked: ["place-2", "place-1"],
+            rationale: "Top match.",
+          }),
+          toolCalls: [],
+        }),
+      },
+    });
+
+    assert.equal(result.places[0]?.placeId, "place-2");
+    result.places.forEach((place) => {
+      assert.ok(place.mapsUrl);
+      assert.ok(place.placeId);
+    });
+  } finally {
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+    process.env.COMPOSIO_MCP_URL = originalMcpUrl;
+    process.env.COMPOSIO_API_KEY = originalApiKey;
+    process.env.LLM_RELEVANCE_RANKING_ENABLED = originalRankFlag;
+    resetExtractPlacesFromMcpResult();
+  }
+});
