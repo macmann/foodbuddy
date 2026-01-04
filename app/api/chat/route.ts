@@ -42,6 +42,11 @@ import { PENDING_ACTION_RECOMMEND } from "../../../lib/chat/recommendState";
 import { geocodeLocationText } from "../../../lib/intent/geocode";
 import { applyGuardrails } from "../../../lib/intent/locationGuardrails";
 import { parseLocationWithLLM } from "../../../lib/intent/locationParser";
+import {
+  normalizeRequestCoords,
+  resolveSearchCoords,
+  type SearchCoordsSource,
+} from "../../../lib/chat/searchCoords";
 import { listMcpTools, mcpCall } from "../../../lib/mcp/client";
 import { resolveMcpPayloadFromResult } from "../../../lib/mcp/resultParser";
 import { resolveMcpTools } from "../../../lib/mcp/toolResolver";
@@ -124,7 +129,6 @@ const coerceString = (value: unknown): string | undefined => {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 };
-
 
 const sanitizeAttempts = (raw: unknown): Attempt[] | undefined => {
   if (!Array.isArray(raw)) {
@@ -793,7 +797,8 @@ export async function POST(request: Request) {
     return response;
   };
 
-  const parsedBody = parseChatRequestBody(await request.json());
+  const rawBody = await request.json();
+  const parsedBody = parseChatRequestBody(rawBody);
 
   if (!isChatRequestBody(parsedBody)) {
     return respondError(400, "Invalid request.");
@@ -809,15 +814,18 @@ export async function POST(request: Request) {
 
   const userIdHash = hashUserId(body.anonId);
   const requestLocationText = body.neighborhood ?? body.locationText;
+  const reqCoords = normalizeRequestCoords(rawBody);
+  const roundedLat = reqCoords ? Math.round(reqCoords.lat * 1000) / 1000 : undefined;
+  const roundedLng = reqCoords ? Math.round(reqCoords.lng * 1000) / 1000 : undefined;
   const geoLocation = normalizeGeoLocation({
-    coordinates: body.location,
+    coordinates: reqCoords ?? body.location,
     latitude: body.latitude ?? undefined,
     longitude: body.longitude ?? undefined,
     locationText: requestLocationText,
   });
   const gpsCoords = getLocationCoords(geoLocation);
-  const coords = gpsCoords ?? null;
-  const hasCoordinates = Boolean(coords);
+  const coords = reqCoords ?? gpsCoords ?? null;
+  const hasCoordinates = Boolean(reqCoords);
   const locationText = requestLocationText ?? undefined;
   const eventLocation: GeoLocation =
     coords
@@ -829,7 +837,7 @@ export async function POST(request: Request) {
         ? geoLocation
         : { kind: "none" };
   const locationEnabled = Boolean(body.locationEnabled);
-  const locale = request.headers.get("accept-language")?.split(",")[0];
+  const locale = request.headers.get("accept-language")?.split(",")[0] ?? null;
   const radius_m =
     typeof body.radius_m === "number" && Number.isFinite(body.radius_m) && body.radius_m > 0
       ? body.radius_m
@@ -842,6 +850,17 @@ export async function POST(request: Request) {
   const narrationTimeoutMs = Number(process.env.NARRATION_LLM_TIMEOUT_MS ?? 2800);
   const searchMessage = body.message;
   const sessionQuery = body.message;
+
+  logger.info(
+    {
+      ...logContext,
+      hasCoordinates,
+      reqCoordsPresent: Boolean(reqCoords),
+      latRounded: roundedLat,
+      lngRounded: roundedLng,
+    },
+    "Parsed request coords",
+  );
 
   logger.info(
     {
@@ -973,14 +992,17 @@ export async function POST(request: Request) {
     explicitLocationText: requestLocationText,
     requestId,
   });
+  const effectiveParse = reqCoords
+    ? { ...guarded, use_device_location: true }
+    : guarded;
 
   logger.info(
     {
       requestId,
-      query: guarded.query,
-      location_text: guarded.location_text ?? null,
-      use_device_location: guarded.use_device_location,
-      confidence: guarded.confidence,
+      query: effectiveParse.query,
+      location_text: effectiveParse.location_text ?? null,
+      use_device_location: effectiveParse.use_device_location,
+      confidence: effectiveParse.confidence,
     },
     "Location parser summary",
   );
@@ -989,22 +1011,27 @@ export async function POST(request: Request) {
     searchSession?.pendingAction === PENDING_ACTION_RECOMMEND
       ? searchSession.pendingKeyword ?? undefined
       : undefined;
-  const parsedKeyword = guarded.query?.trim();
+  const parsedKeyword = effectiveParse.query?.trim();
   const keyword =
     (parsedKeyword && parsedKeyword.length > 0 ? parsedKeyword : undefined) ??
     pendingKeyword ??
     extractCuisineKeyword(body.message) ??
     "restaurant";
   const parsedRadius =
-    typeof guarded.radius_m === "number" && Number.isFinite(guarded.radius_m) && guarded.radius_m > 0
-      ? Math.round(guarded.radius_m)
+    typeof effectiveParse.radius_m === "number" &&
+    Number.isFinite(effectiveParse.radius_m) &&
+    effectiveParse.radius_m > 0
+      ? Math.round(effectiveParse.radius_m)
       : radiusMeters;
   const placeTypes =
-    Array.isArray(guarded.place_types) && guarded.place_types.length > 0
-      ? guarded.place_types
+    Array.isArray(effectiveParse.place_types) && effectiveParse.place_types.length > 0
+      ? effectiveParse.place_types
       : undefined;
 
-  if (guarded.intent === "clarify") {
+  const effectiveIntent =
+    reqCoords && effectiveParse.intent === "clarify" ? "nearby_search" : effectiveParse.intent;
+
+  if (effectiveIntent === "clarify") {
     await setPending(sessionId, {
       action: PENDING_ACTION_RECOMMEND,
       keyword,
@@ -1035,42 +1062,48 @@ export async function POST(request: Request) {
   let resolvedLocationLabel: string | undefined = locationText ?? undefined;
   let searchLocationText: string | undefined;
   let confirmMessage: string | undefined;
+  let coordsSource: SearchCoordsSource = "none";
 
-  if (guarded.use_device_location && coords) {
-    searchCoords = coords;
-  } else if (guarded.location_text) {
+  if (!reqCoords && effectiveParse.location_text) {
     await setPending(sessionId, {
       action: PENDING_ACTION_RECOMMEND,
       keyword,
     });
-    const geocodeResult = await geocodeLocationText(guarded.location_text, {
-      requestId,
-      locale,
-      countryHint,
-      coords,
-    });
-    if (!geocodeResult.coords) {
-      return respondChat(
-        200,
-        buildChatResponse({
-          status: "ok",
-          message:
-            "I couldn't find that location. Please confirm a neighborhood or enable location.",
-          places: [],
-          sessionId,
-          userMessage: body.message,
-          locationLabel: locationText,
-          radiusMeters: parsedRadius,
-        }),
-      );
-    }
-    searchCoords = geocodeResult.coords;
-    resolvedLocationLabel = geocodeResult.formattedAddress ?? guarded.location_text;
-    searchLocationText = resolvedLocationLabel;
-    confirmMessage = `Got it — searching near ${resolvedLocationLabel}…`;
-  } else if (sessionCoords) {
-    searchCoords = sessionCoords;
   }
+
+  const resolvedSearchCoords = await resolveSearchCoords({
+    reqCoords,
+    locationText: effectiveParse.location_text ?? undefined,
+    sessionCoords,
+    requestId,
+    locale,
+    countryHint,
+    coords,
+    geocode: geocodeLocationText,
+  });
+
+  if (resolvedSearchCoords.geocodeFailed) {
+    return respondChat(
+      200,
+      buildChatResponse({
+        status: "ok",
+        message:
+          "I couldn't find that location. Please confirm a neighborhood or enable location.",
+        places: [],
+        sessionId,
+        userMessage: body.message,
+        locationLabel: locationText,
+        radiusMeters: parsedRadius,
+      }),
+    );
+  }
+
+  searchCoords = resolvedSearchCoords.searchCoords;
+  coordsSource = resolvedSearchCoords.coordsSource;
+  resolvedLocationLabel =
+    resolvedSearchCoords.resolvedLocationLabel ?? resolvedLocationLabel;
+  searchLocationText = resolvedSearchCoords.searchLocationText ?? searchLocationText;
+  confirmMessage = resolvedSearchCoords.confirmMessage ?? confirmMessage;
 
   if (!searchCoords) {
     await setPending(sessionId, {
@@ -1097,6 +1130,18 @@ export async function POST(request: Request) {
     lng: searchCoords.lng,
     radiusM: parsedRadius,
   });
+
+  logger.info(
+    {
+      requestId,
+      keyword,
+      coordsSource,
+      radiusMeters: parsedRadius,
+      lat: Math.round(searchCoords.lat * 1000) / 1000,
+      lng: Math.round(searchCoords.lng * 1000) / 1000,
+    },
+    "Final search params",
+  );
 
   const searchResult = await searchPlacesWithMcp({
     keyword,
