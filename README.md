@@ -28,6 +28,25 @@ npm install
 Copy `.env.example` to `.env` and update the values as needed. Feature flags allow the app to
 start without Telegram or RAG configured.
 
+### LLM parsing + narration
+
+FoodBuddy uses an LLM-assisted parser to extract the search keyword and explicit location,
+then applies deterministic guardrails before calling Google Maps MCP. Narration is also
+LLM-backed but runs with a strict timeout and falls back to a deterministic summary.
+
+Required for LLM features:
+
+```bash
+OPENAI_API_KEY=your_openai_key
+```
+
+Optional timeouts (milliseconds):
+
+```bash
+LOCATION_PARSER_TIMEOUT_MS=3500
+NARRATION_LLM_TIMEOUT_MS=2800
+```
+
 ### Places provider configuration
 
 FoodBuddy auto-selects a places provider:

@@ -1,7 +1,12 @@
 import { logger } from "../logger";
 import { normalizeModel } from "./model";
 import type { ToolSchema } from "./types";
-import { normalizeVerbosity, type ReasoningEffort, type Verbosity } from "../settings/llm";
+import {
+  modelSupportsTemperature,
+  normalizeVerbosity,
+  type ReasoningEffort,
+  type Verbosity,
+} from "../settings/llm";
 
 export type LlmMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -34,6 +39,7 @@ type CallLlmInput = {
   requestId?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  temperature?: number;
 };
 
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1";
@@ -63,6 +69,7 @@ export const callOpenAI = async ({
   requestId,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   signal,
+  temperature,
 }: CallLlmInput): Promise<LlmResponse> => {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY is required to call the LLM");
@@ -110,6 +117,10 @@ export const callOpenAI = async ({
     reasoning: { effort: settings.reasoningEffort },
     text: { verbosity: normalizedVerbosity },
   };
+
+  if (typeof temperature === "number" && modelSupportsTemperature(model)) {
+    body.temperature = temperature;
+  }
 
   if (!toolsDisabled) {
     body.tool_choice = "auto";
