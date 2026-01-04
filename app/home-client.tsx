@@ -6,7 +6,6 @@ import Composer from "../components/Composer";
 import FeedbackCard from "../components/FeedbackCard";
 import LocationGate from "../components/LocationGate";
 import MessageBubble, { type MessageBubbleData } from "../components/MessageBubble";
-import PlaceCard from "../components/PlaceCard";
 import RecommendationCard from "../components/RecommendationCard";
 import type { ChatResponse, RecommendationCardData } from "../lib/types/chat";
 
@@ -14,6 +13,7 @@ type ChatMessage = MessageBubbleData & {
   recommendations?: RecommendationCardData[];
   places?: RecommendationCardData[];
   alternatives?: RecommendationCardData[];
+  visiblePlacesCount?: number;
   status?: ChatResponse["status"];
   responseError?: boolean;
 };
@@ -33,6 +33,15 @@ const PLACEHOLDER_OPTIONS = [
 const getRandomPlaceholder = () =>
   PLACEHOLDER_OPTIONS[Math.floor(Math.random() * PLACEHOLDER_OPTIONS.length)];
 const DEFAULT_RADIUS_M = 1500;
+const PLACE_INCREMENT = 3;
+
+const getMapsUrl = (place: RecommendationCardData) =>
+  place.mapsUrl ??
+  (place.placeId
+    ? `https://www.google.com/maps/search/?api=1&query_place_id=${encodeURIComponent(
+        place.placeId,
+      )}`
+    : undefined);
 
 const normalizeStatus = (
   status: ChatResponse["status"] | string | undefined,
@@ -280,6 +289,7 @@ export default function HomePageClient() {
         recommendations,
         alternatives,
         places,
+        visiblePlacesCount: Math.min(PLACE_INCREMENT, places.length),
         status: normalizedStatus,
         responseError,
         error: normalizedStatus === "error",
@@ -361,8 +371,21 @@ export default function HomePageClient() {
     setFeedbackSuccess(null);
   };
 
-  const handleShowMore = () => {
-    sendMessage("show more options");
+  const handleShowMore = (messageId: string) => {
+    setMessages((prev) =>
+      prev.map((message) => {
+        if (message.id !== messageId) {
+          return message;
+        }
+        const placesCount = message.places?.length ?? 0;
+        const currentVisible =
+          message.visiblePlacesCount ?? Math.min(PLACE_INCREMENT, placesCount);
+        return {
+          ...message,
+          visiblePlacesCount: Math.min(currentVisible + PLACE_INCREMENT, placesCount),
+        };
+      }),
+    );
   };
 
   const handleScroll = () => {
@@ -429,61 +452,74 @@ export default function HomePageClient() {
               />
             )}
 
-            {messages.map((message) => (
-              <div key={message.id} className="space-y-3">
-                <MessageBubble message={message} onRetry={handleRetry}>
-                  {message.places &&
-                    message.places.length > 0 &&
-                    (!message.recommendations || message.recommendations.length === 0) && (
-                    <div className="mt-3 grid gap-3">
-                      {message.places.map((place) => (
-                        <PlaceCard key={place.placeId} place={place} />
-                      ))}
-                    </div>
-                  )}
-                  {message.recommendations && message.recommendations.length > 0 && (
-                    <div className="mt-3 grid gap-3">
-                      {message.recommendations.map((rec) => (
-                        <RecommendationCard
-                          key={rec.placeId}
-                          recommendation={rec}
-                          onRate={handleRateFromCard}
-                        />
-                      ))}
-                      <button
-                        type="button"
-                        onClick={handleShowMore}
-                        className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
-                      >
-                        Show 3 more
-                      </button>
-                    </div>
-                  )}
-                  {message.alternatives && message.alternatives.length > 0 && (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {message.alternatives.slice(0, 4).map((alt) => (
-                        <span
-                          key={alt.placeId}
-                          className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm"
-                        >
-                          {alt.name}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {message.role === "assistant" &&
-                    message.status &&
-                    message.status !== "ok" &&
-                    (!message.places || message.places.length === 0) && (
-                      <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-                        We couldn’t find nearby spots right now. Try a different location
-                        or tweak your search.
+            {messages.map((message) => {
+              const placesCount = message.places?.length ?? 0;
+              const visiblePlacesCount =
+                message.visiblePlacesCount ?? Math.min(PLACE_INCREMENT, placesCount);
+              const visiblePlaces = message.places?.slice(0, visiblePlacesCount) ?? [];
+              const remainingPlaces = Math.max(0, placesCount - visiblePlacesCount);
+              const showMoreCount = Math.min(PLACE_INCREMENT, remainingPlaces);
+              const chipPlaces = message.places?.slice(
+                visiblePlacesCount,
+                visiblePlacesCount + 4,
+              );
+
+              return (
+                <div key={message.id} className="space-y-3">
+                  <MessageBubble message={message} onRetry={handleRetry}>
+                    {visiblePlaces.length > 0 && (
+                      <div className="mt-3 grid gap-3">
+                        {visiblePlaces.map((place) => (
+                          <RecommendationCard
+                            key={place.placeId}
+                            recommendation={place}
+                            onRate={handleRateFromCard}
+                          />
+                        ))}
+                        {remainingPlaces > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => handleShowMore(message.id)}
+                            className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+                          >
+                            Show {showMoreCount} more
+                          </button>
+                        )}
                       </div>
                     )}
-                </MessageBubble>
-                <div className="h-px w-full bg-slate-100" />
-              </div>
-            ))}
+                    {chipPlaces && chipPlaces.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {chipPlaces.map((alt) => {
+                          const mapsUrl = getMapsUrl(alt);
+                          return (
+                            <a
+                              key={alt.placeId}
+                              href={mapsUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              aria-label={`Open ${alt.name} in Maps`}
+                              className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+                            >
+                              {alt.name}
+                            </a>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {message.role === "assistant" &&
+                      message.status &&
+                      message.status !== "ok" &&
+                      (!message.places || message.places.length === 0) && (
+                        <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                          We couldn’t find nearby spots right now. Try a different location
+                          or tweak your search.
+                        </div>
+                      )}
+                  </MessageBubble>
+                  <div className="h-px w-full bg-slate-100" />
+                </div>
+              );
+            })}
 
             {loading && (
               <div className="flex justify-start">
