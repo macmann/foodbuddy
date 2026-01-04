@@ -112,13 +112,14 @@ test("POST uses geocoded coords for nearby search when location_text is present"
     });
 
     const response = await POST(request);
-    const payload = (await response.json()) as { places: unknown[] };
+    const payload = (await response.json()) as { places: unknown[]; meta?: { mode?: string } };
 
     assert.ok(geocodeArgs);
     assert.ok(nearbyArgs);
     assert.equal((nearbyArgs as { latitude?: number }).latitude, 16.76);
     assert.equal((nearbyArgs as { longitude?: number }).longitude, 96.2);
     assert.equal(payload.places.length, 1);
+    assert.ok(payload.meta?.mode);
   } finally {
     if (originalFetch) {
       globalThis.fetch = originalFetch;

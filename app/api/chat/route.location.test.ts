@@ -14,8 +14,12 @@ test("POST asks for location when no explicit location or coords are provided", 
   });
 
   const response = await POST(request);
-  const payload = (await response.json()) as { message: string; meta?: { needs_location?: boolean } };
+  const payload = (await response.json()) as {
+    message: string;
+    meta?: { needs_location?: boolean; mode?: string };
+  };
 
   assert.equal(payload.meta?.needs_location, true);
+  assert.equal(payload.meta?.mode, "needs_location");
   assert.match(payload.message.toLowerCase(), /location/);
 });

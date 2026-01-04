@@ -16,6 +16,7 @@ type ChatMessage = MessageBubbleData & {
   visiblePlacesCount?: number;
   status?: ChatResponse["status"];
   responseError?: boolean;
+  suggestedPrompts?: string[];
 };
 
 const isRecommendationCard = (
@@ -34,14 +35,15 @@ const getRandomPlaceholder = () =>
   PLACEHOLDER_OPTIONS[Math.floor(Math.random() * PLACEHOLDER_OPTIONS.length)];
 const DEFAULT_RADIUS_M = 1500;
 const PLACE_INCREMENT = 3;
+const PREF_CHIPS = [
+  { label: "Spicy", message: "I like spicy" },
+  { label: "Budget-friendly", message: "I like cheap food" },
+  { label: "Halal", message: "I prefer halal" },
+  { label: "Vegetarian", message: "I prefer vegetarian" },
+  { label: "Quiet", message: "I like quiet places" },
+];
 
-const getMapsUrl = (place: RecommendationCardData) =>
-  place.mapsUrl ??
-  (place.placeId
-    ? `https://www.google.com/maps/search/?api=1&query_place_id=${encodeURIComponent(
-        place.placeId,
-      )}`
-    : undefined);
+const getMapsUrl = (place: RecommendationCardData) => place.mapsUrl ?? undefined;
 
 const normalizeStatus = (
   status: ChatResponse["status"] | string | undefined,
@@ -76,6 +78,7 @@ export default function HomePageClient() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [lastActivityAt, setLastActivityAt] = useState<number | null>(null);
   const [composerPlaceholder] = useState(getRandomPlaceholder);
+  const [showPreferences, setShowPreferences] = useState(false);
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -175,7 +178,11 @@ export default function HomePageClient() {
     setLocationError(null);
   };
 
-  const sendMessage = async (messageText: string, addUserMessage = true) => {
+  const sendMessage = async (
+    messageText: string,
+    addUserMessage = true,
+    options?: { action?: string },
+  ) => {
     if (!messageText.trim() || loading) {
       return;
     }
@@ -220,6 +227,7 @@ export default function HomePageClient() {
         locationText: location ? undefined : locationText,
         neighborhood: neighborhood || undefined,
         message: userMessage.content,
+        action: options?.action,
         latitude: location?.lat ?? null,
         longitude: location?.lng ?? null,
         radius_m: typeof radius_m === "number" ? radius_m : DEFAULT_RADIUS_M,
@@ -293,6 +301,7 @@ export default function HomePageClient() {
         status: normalizedStatus,
         responseError,
         error: normalizedStatus === "error",
+        suggestedPrompts: data.meta?.suggestedPrompts,
         createdAt: Date.now(),
       };
 
@@ -491,6 +500,9 @@ export default function HomePageClient() {
                       <div className="mt-3 flex flex-wrap gap-2">
                         {chipPlaces.map((alt) => {
                           const mapsUrl = getMapsUrl(alt);
+                          if (!mapsUrl) {
+                            return null;
+                          }
                           return (
                             <a
                               key={alt.placeId}
@@ -513,6 +525,27 @@ export default function HomePageClient() {
                         <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
                           We couldn’t find nearby spots right now. Try a different location
                           or tweak your search.
+                        </div>
+                      )}
+                    {message.role === "assistant" &&
+                      message.suggestedPrompts &&
+                      message.suggestedPrompts.length > 0 && (
+                        <div className="mt-4 space-y-2">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Suggested
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {message.suggestedPrompts.map((prompt) => (
+                              <button
+                                key={`${message.id}-${prompt}`}
+                                type="button"
+                                onClick={() => sendMessage(prompt, true, { action: "refine" })}
+                                className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+                              >
+                                {prompt}
+                              </button>
+                            ))}
+                          </div>
                         </div>
                       )}
                   </MessageBubble>
@@ -563,6 +596,37 @@ export default function HomePageClient() {
               </div>
             )}
           </div>
+
+          {messages.length >= 2 && (
+            <div className="border-t border-slate-100 px-4 py-3 sm:px-6">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Preferences
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowPreferences((prev) => !prev)}
+                  className="text-xs font-semibold text-slate-500 hover:text-slate-700"
+                >
+                  {showPreferences ? "Hide" : "Set"}
+                </button>
+              </div>
+              {showPreferences && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {PREF_CHIPS.map((chip) => (
+                    <button
+                      key={chip.label}
+                      type="button"
+                      onClick={() => sendMessage(chip.message, true, { action: "set_pref" })}
+                      className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+                    >
+                      {chip.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <form onSubmit={handleSubmit}>
             <Composer

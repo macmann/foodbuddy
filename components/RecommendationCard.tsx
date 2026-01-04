@@ -53,6 +53,14 @@ export default function RecommendationCard({ recommendation, onRate }: Recommend
       {recommendation.rationale && (
         <p className="mt-2 text-sm text-slate-600">{recommendation.rationale}</p>
       )}
+      {recommendation.whyLine && (
+        <p className="mt-2 text-sm font-semibold text-slate-700">
+          {recommendation.whyLine}
+        </p>
+      )}
+      {recommendation.tryLine && (
+        <p className="mt-1 text-sm text-slate-600">{recommendation.tryLine}</p>
+      )}
       <div className="mt-4 flex flex-wrap items-center gap-2">
         {recommendation.mapsUrl && (
           <a

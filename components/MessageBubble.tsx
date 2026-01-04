@@ -56,13 +56,13 @@ export default function MessageBubble({ message, children, onRetry }: MessageBub
             ? "bg-slate-900 text-white"
             : message.error
               ? "bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-200"
-              : "bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-slate-100"
+              : "border border-slate-200 bg-white text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
         }`}
       >
         {displayContent && (
           <p
             className={`whitespace-pre-line ${
-              isUser ? "text-white" : "text-slate-800 dark:text-slate-100"
+              isUser ? "text-white" : "text-slate-900 dark:text-slate-100"
             }`}
           >
             {displayContent}
