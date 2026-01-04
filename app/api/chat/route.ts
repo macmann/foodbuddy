@@ -79,6 +79,8 @@ type ChatRequestBody = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
+const isError = (value: unknown): value is Error => value instanceof Error;
+
 const isAbortError = (error: unknown) =>
   error instanceof Error && error.name === "AbortError";
 
@@ -208,6 +210,9 @@ const parseChatRequestBody = (payload: unknown): ChatRequestBody | null => {
     locationEnabled,
   };
 };
+
+const isChatRequestBody = (value: ChatRequestBody | null): value is ChatRequestBody =>
+  value !== null;
 
 const buildToolDebug = (
   toolDebug?: Record<string, unknown>,
@@ -788,11 +793,12 @@ export async function POST(request: Request) {
     return response;
   };
 
-  const body = parseChatRequestBody(await request.json());
+  const parsedBody = parseChatRequestBody(await request.json());
 
-  if (!body) {
+  if (!isChatRequestBody(parsedBody)) {
     return respondError(400, "Invalid request.");
   }
+  const body: ChatRequestBody = parsedBody;
 
   const sessionId = body.sessionId ?? randomUUID();
   const timeoutMs = isFollowUpIntent(body) ? extendedTimeoutMs : defaultTimeoutMs;
@@ -1140,16 +1146,17 @@ export async function POST(request: Request) {
     }),
   );
 
-  let settings: Awaited<ReturnType<typeof getLLMSettings>> | undefined;
+  const settings = await getLLMSettings();
+  const llmModel = settings.llmModel;
+  if (!llmModel) {
+    logger.warn({ ...logContext }, "LLM model missing, using fallback");
+  }
   let llmTimedOut = false;
   try {
-    settings = await getLLMSettings();
-
-    const llmModel = settings.llmModel;
     const hasSystemPrompt =
       typeof settings.llmSystemPrompt === "string" &&
       settings.llmSystemPrompt.trim().length > 0;
-    const agentEnabled = settings?.llmEnabled === true;
+    const agentEnabled = settings.llmEnabled === true;
     const modelAllowed = isAllowedModel(llmModel);
     let reason = "agent_success";
 
@@ -1253,28 +1260,35 @@ export async function POST(request: Request) {
         clearTimeout(timeout);
       }
 
-      if (agentResult) {
+      if (agentResult !== null) {
+        const resolvedAgentResult =
+          agentResult as NonNullable<typeof agentResult>;
         const recommendations =
-          agentResult.places && agentResult.places.length > 0
-            ? agentResult.places
-            : [agentResult.primary, ...(agentResult.alternatives ?? [])].filter(
+          resolvedAgentResult.places && resolvedAgentResult.places.length > 0
+            ? resolvedAgentResult.places
+            : [
+                resolvedAgentResult.primary,
+                ...(resolvedAgentResult.alternatives ?? []),
+              ].filter(
                 (item): item is RecommendationCardData => Boolean(item),
               );
         const resultCount = recommendations.length;
-        const status = agentResult.status;
+        const status = resolvedAgentResult.status;
         const parsedConstraints = parseQuery(body.message);
         const rawResponseJson = truncateJson(
           JSON.stringify({
-            assistant: agentResult.message,
-            toolCallCount: agentResult.toolCallCount,
-            parsedOutput: agentResult.parsedOutput,
-            toolResponses: agentResult.rawResponse,
+            assistant: resolvedAgentResult.message,
+            toolCallCount: resolvedAgentResult.toolCallCount,
+            parsedOutput: resolvedAgentResult.parsedOutput,
+            toolResponses: resolvedAgentResult.rawResponse,
           }),
         );
         const toolInfo = buildToolDebug(
-          isRecord(agentResult.toolDebug) ? agentResult.toolDebug : undefined,
+          isRecord(resolvedAgentResult.toolDebug)
+            ? resolvedAgentResult.toolDebug
+            : undefined,
         );
-        if (toolInfo || agentResult.toolCallCount > 0) {
+        if (toolInfo || resolvedAgentResult.toolCallCount > 0) {
           logger.info(
             {
               requestId,
@@ -1299,8 +1313,8 @@ export async function POST(request: Request) {
             source: "agent",
             agentEnabled,
             llmModel,
-            toolCallCount: agentResult.toolCallCount,
-            fallbackUsed: agentResult.fallbackUsed,
+            toolCallCount: resolvedAgentResult.toolCallCount,
+            fallbackUsed: resolvedAgentResult.fallbackUsed,
             rawResponseJson,
           },
           {
@@ -1310,7 +1324,7 @@ export async function POST(request: Request) {
             recommendedPlaceIds: recommendations.map((item) => item.placeId),
             parsedConstraints: {
               ...parsedConstraints,
-              llm: agentResult.parsedOutput ?? null,
+              llm: resolvedAgentResult.parsedOutput ?? null,
             },
           },
         );
@@ -1321,12 +1335,13 @@ export async function POST(request: Request) {
         );
 
         if (coords) {
+          const resolvedCoords = coords as NonNullable<typeof coords>;
           const existingSession = await loadSearchSession(sessionId);
           await upsertSearchSession({
             sessionId,
             lastQuery: sessionQuery,
-            lastLat: coords.lat,
-            lastLng: coords.lng,
+            lastLat: resolvedCoords.lat,
+            lastLng: resolvedCoords.lng,
             lastRadiusM: radiusMeters,
             nextPageToken: existingSession?.nextPageToken ?? null,
           });
@@ -1335,13 +1350,13 @@ export async function POST(request: Request) {
         return respondChat(
           200,
           buildAgentResponse({
-            agentMessage: agentResult.message,
+            agentMessage: resolvedAgentResult.message,
             recommendations,
             status,
             requestId,
-            errorMessage: agentResult.errorMessage,
+            errorMessage: resolvedAgentResult.errorMessage,
             debugEnabled,
-            toolDebug: agentResult.toolDebug,
+            toolDebug: resolvedAgentResult.toolDebug,
             sessionId,
             userMessage: body.message,
             locationLabel: locationText,
@@ -1374,8 +1389,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const agentEnabled = settings?.llmEnabled === true;
-  const llmModel = settings?.llmModel ?? null;
+  const agentEnabled = settings.llmEnabled === true;
 
   if (!coords) {
     logger.info({ ...logContext, path: "fallback" }, "Missing location for chat");
@@ -1420,6 +1434,7 @@ export async function POST(request: Request) {
     );
   }
 
+  const resolvedCoords = coords as NonNullable<typeof coords>;
   const recommendationStart = Date.now();
   const parsedConstraints = parseQuery(body.message);
   try {
@@ -1430,19 +1445,19 @@ export async function POST(request: Request) {
     const recommendation = await recommend({
       channel: "WEB",
       userIdHash,
-      location: coords,
+      location: resolvedCoords,
       queryText: searchMessage,
       radiusMetersOverride: radiusMeters,
       requestId,
     });
 
-    let payload = buildRecommendationPayload(recommendation, coords);
+    let payload = buildRecommendationPayload(recommendation, resolvedCoords);
     const maxDistanceMeters = Math.max(
       radiusMeters * DEFAULT_MAX_DISTANCE_MULTIPLIER,
       5_000,
     );
     const safetyFiltered = filterByMaxDistance(
-      coords,
+      resolvedCoords,
       payload,
       (item) =>
         typeof item.lat === "number" && typeof item.lng === "number"
@@ -1454,8 +1469,8 @@ export async function POST(request: Request) {
       logger.info(
         {
           requestId,
-          originLat: coords.lat,
-          originLng: coords.lng,
+          originLat: resolvedCoords.lat,
+          originLng: resolvedCoords.lng,
           radiusMeters,
           maxDistanceMeters,
           droppedCount: safetyFiltered.droppedCount,
@@ -1528,8 +1543,8 @@ export async function POST(request: Request) {
     await upsertSearchSession({
       sessionId,
       lastQuery: sessionQuery,
-      lastLat: coords.lat,
-      lastLng: coords.lng,
+      lastLat: resolvedCoords.lat,
+      lastLng: resolvedCoords.lng,
       lastRadiusM: radiusMeters,
       nextPageToken: null,
     });
@@ -1560,7 +1575,9 @@ export async function POST(request: Request) {
     );
   } catch (fallbackError) {
     const errorMessage =
-      fallbackError instanceof Error ? fallbackError.message : "Unknown error";
+      isError(fallbackError)
+        ? (fallbackError as Error).message
+        : "Unknown error";
     await writeRecommendationEvent(
       {
         channel: "WEB",

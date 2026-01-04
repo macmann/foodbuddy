@@ -92,6 +92,24 @@ export const modelSupportsTemperature = (model: string): boolean =>
 
 let cachedSettings: { value: LLMSettingsValue; expiresAt: number } | null = null;
 
+const envModel = (() => {
+  const candidate = process.env.LLM_MODEL ?? process.env.OPENAI_MODEL;
+  if (!candidate) {
+    return undefined;
+  }
+  const trimmed = candidate.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+})();
+
+const envSystemPrompt = (() => {
+  const candidate = process.env.LLM_SYSTEM_PROMPT;
+  if (!candidate) {
+    return undefined;
+  }
+  const trimmed = candidate.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+})();
+
 const normalizeSettings = (settings?: Partial<LLMSettingsValue>): LLMSettingsValue => {
   const llmEnabled =
     typeof settings?.llmEnabled === "boolean" ? settings.llmEnabled : DEFAULT_LLM_ENABLED;
@@ -99,9 +117,11 @@ const normalizeSettings = (settings?: Partial<LLMSettingsValue>): LLMSettingsVal
     typeof settings?.llmProvider === "string" && settings.llmProvider.trim().length > 0
       ? settings.llmProvider.trim()
       : DEFAULT_PROVIDER;
-  const llmModel = settings?.llmModel ?? DEFAULT_MODEL;
+  const llmModel = settings?.llmModel ?? envModel ?? DEFAULT_MODEL;
   const candidatePrompt =
-    typeof settings?.llmSystemPrompt === "string" ? settings.llmSystemPrompt.trim() : "";
+    typeof settings?.llmSystemPrompt === "string"
+      ? settings.llmSystemPrompt.trim()
+      : envSystemPrompt ?? "";
   const rawPrompt = candidatePrompt.length > 0 ? candidatePrompt : DEFAULT_SYSTEM_PROMPT;
   const llmSystemPrompt =
     rawPrompt.length <= MAX_PROMPT_LENGTH ? rawPrompt : DEFAULT_SYSTEM_PROMPT;
