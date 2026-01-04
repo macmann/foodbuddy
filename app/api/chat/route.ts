@@ -65,6 +65,8 @@ const defaultTimeoutMs = 12_000;
 const extendedTimeoutMs = 25_000;
 const locationPromptMessage =
   "Please share your location or enable GPS (e.g., Yangon, Hlaing, Mandalay).";
+const allowRequestCoordsFallback =
+  process.env.EXPLICIT_LOCATION_COORDS_FALLBACK !== "false";
 
 
 type ChatRequestBody = {
@@ -1086,27 +1088,37 @@ export async function POST(request: Request) {
   });
 
   if (resolvedSearchCoords.geocodeFailed) {
-    return respondChat(
-      200,
-      buildChatResponse({
-        status: "ok",
-        message:
-          "I couldn't find that location. Please confirm a neighborhood or enable location.",
-        places: [],
-        sessionId,
-        userMessage: body.message,
-        locationLabel: locationText,
-        radiusMeters: parsedRadius,
-      }),
-    );
+    if (reqCoords && allowRequestCoordsFallback) {
+      logger.warn(
+        { requestId, keyword },
+        "Geocode failed; falling back to request coords",
+      );
+      searchCoords = reqCoords;
+      coordsSource = "request_coords";
+    } else {
+      return respondChat(
+        200,
+        buildChatResponse({
+          status: "ok",
+          message:
+            "I couldn't find that location. Please provide a more specific location (e.g., 'Thanlyin, Yangon').",
+          places: [],
+          sessionId,
+          userMessage: body.message,
+          locationLabel: locationText,
+          radiusMeters: parsedRadius,
+          needsLocation: true,
+        }),
+      );
+    }
+  } else {
+    searchCoords = resolvedSearchCoords.searchCoords;
+    coordsSource = resolvedSearchCoords.coordsSource;
+    resolvedLocationLabel =
+      resolvedSearchCoords.resolvedLocationLabel ?? resolvedLocationLabel;
+    searchLocationText = resolvedSearchCoords.searchLocationText ?? searchLocationText;
+    confirmMessage = resolvedSearchCoords.confirmMessage ?? confirmMessage;
   }
-
-  searchCoords = resolvedSearchCoords.searchCoords;
-  coordsSource = resolvedSearchCoords.coordsSource;
-  resolvedLocationLabel =
-    resolvedSearchCoords.resolvedLocationLabel ?? resolvedLocationLabel;
-  searchLocationText = resolvedSearchCoords.searchLocationText ?? searchLocationText;
-  confirmMessage = resolvedSearchCoords.confirmMessage ?? confirmMessage;
 
   if (!searchCoords) {
     await setPending(sessionId, {
@@ -1147,12 +1159,25 @@ export async function POST(request: Request) {
     "Location resolution decision",
   );
 
+  logger.info(
+    {
+      requestId,
+      coordsSource,
+      keyword,
+      radiusMeters: parsedRadius,
+      lat: searchCoords.lat,
+      lng: searchCoords.lng,
+    },
+    "Final search params",
+  );
+
   const searchResult = await searchPlacesWithMcp({
     keyword,
     coords: searchCoords,
     radiusMeters: parsedRadius,
     requestId,
     locationText: searchLocationText,
+    forceNearbySearch: coordsSource === "geocoded_text",
     placeTypes,
   });
 

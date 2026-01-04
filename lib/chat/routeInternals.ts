@@ -399,6 +399,7 @@ export const searchPlacesWithMcp = async ({
   requestId,
   locationText,
   distanceRetryAttempted = false,
+  forceNearbySearch = false,
   placeTypes,
 }: {
   keyword: string;
@@ -407,6 +408,7 @@ export const searchPlacesWithMcp = async ({
   requestId: string;
   locationText?: string;
   distanceRetryAttempted?: boolean;
+  forceNearbySearch?: boolean;
   placeTypes?: string[];
 }): Promise<McpPlacesSearchResult> => {
   const mcpUrl = (process.env.COMPOSIO_MCP_URL ?? "").trim().replace(/^"+|"+$/g, "");
@@ -428,7 +430,7 @@ export const searchPlacesWithMcp = async ({
   const normalizedKeyword = buildFoodSearchQuery(keyword);
   const intentKeyword = keyword.trim().length > 0 ? keyword.trim() : "restaurant";
   const preferTextSearch =
-    Boolean(locationText) || hasExplicitLocationPhrase(keyword);
+    !forceNearbySearch && (Boolean(locationText) || hasExplicitLocationPhrase(keyword));
   const selectedTool = preferTextSearch
     ? resolvedTools.textSearch ?? resolvedTools.nearbySearch
     : resolvedTools.nearbySearch ?? resolvedTools.textSearch;
@@ -650,6 +652,7 @@ export const searchPlacesWithMcp = async ({
         requestId,
         locationText,
         distanceRetryAttempted: true,
+        forceNearbySearch,
         placeTypes,
       });
       const retryMessage = locationText

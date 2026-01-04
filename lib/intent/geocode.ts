@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { logger } from "../logger";
 import { listMcpTools, mcpCall } from "../mcp/client";
+import { extractPlacesFromMcpResult } from "../mcp/placesExtractor";
 import { resolveMcpPayloadFromResult } from "../mcp/resultParser";
 import { resolveMcpTools } from "../mcp/toolResolver";
 import type { ToolDefinition } from "../mcp/types";
@@ -141,6 +142,32 @@ const buildGeocodeArgs = (tool: ToolDefinition, locationText: string) => {
   return { [addressKey]: locationText };
 };
 
+const buildTextSearchArgs = (tool: ToolDefinition, query: string) => {
+  const schema = tool.inputSchema;
+  const schemaProperties = isRecord(schema?.properties) ? schema.properties : undefined;
+  const keys = schemaProperties ? Object.keys(schemaProperties) : [];
+  const lowerKeys = keys.map((key) => key.toLowerCase());
+  const matchSchemaKey = (candidates: string[]) => {
+    for (const candidate of candidates) {
+      const idx = lowerKeys.findIndex((key) => key.includes(candidate));
+      if (idx >= 0) {
+        return keys[idx];
+      }
+    }
+    return undefined;
+  };
+
+  const queryKey = matchSchemaKey(["query", "text", "input", "search"]) ?? "query";
+  const fieldMaskKey = matchSchemaKey(["fieldmask", "field_mask", "fields"]);
+  const args: Record<string, unknown> = { [queryKey]: query };
+
+  if (fieldMaskKey) {
+    args[fieldMaskKey] = "places.location,places.formattedAddress";
+  }
+
+  return args;
+};
+
 const getCachedResult = (key: string): GeocodeResult | null => {
   const cached = geocodeCache.get(key);
   if (!cached) {
@@ -155,6 +182,115 @@ const getCachedResult = (key: string): GeocodeResult | null => {
 
 const setCachedResult = (key: string, value: GeocodeResult) => {
   geocodeCache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+};
+
+export const resolveLocationTextToCoords = async (
+  locationText: string,
+  ctx: GeocodeContext,
+): Promise<{ lat: number; lng: number; formattedAddress?: string } | null> => {
+  const trimmed = locationText.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const query = buildGeocodeQuery(trimmed, ctx);
+  const requestId = ctx.requestId ?? randomUUID();
+
+  logger.info(
+    {
+      requestId,
+      location_text: trimmed,
+      biasedQuery: query,
+    },
+    "Geocode request",
+  );
+
+  const mcpUrl = (process.env.COMPOSIO_MCP_URL ?? "").trim().replace(/^"+|"+$/g, "");
+  const composioApiKey = process.env.COMPOSIO_API_KEY ?? "";
+  if (!mcpUrl) {
+    return null;
+  }
+
+  const tools = await listMcpTools({
+    url: mcpUrl,
+    apiKey: composioApiKey,
+    requestId,
+  });
+  const resolved = resolveMcpTools(tools);
+  const directTool = tools.find(
+    (tool) => tool.name.toLowerCase() === "google_maps_geocode_address_with_query",
+  );
+  const geocodeTool = directTool ?? resolved.geocode;
+
+  if (geocodeTool) {
+    const geocodePayload = await mcpCall<unknown>({
+      url: mcpUrl,
+      apiKey: composioApiKey,
+      method: "tools/call",
+      params: { name: geocodeTool.name, arguments: buildGeocodeArgs(geocodeTool, query) },
+      requestId,
+    });
+    const { payload } = resolveMcpPayloadFromResult(geocodePayload);
+    const coords = extractLatLng(payload ?? {});
+    const formattedAddress =
+      pickFirstString(
+        (payload as { formatted_address?: string })?.formatted_address,
+        (payload as { formattedAddress?: string })?.formattedAddress,
+        (payload as { address?: string })?.address,
+      ) ?? undefined;
+
+    if (coords.lat !== undefined && coords.lng !== undefined) {
+      logger.info(
+        {
+          requestId,
+          latRounded: Math.round(coords.lat * 1000) / 1000,
+          lngRounded: Math.round(coords.lng * 1000) / 1000,
+          formattedAddress: formattedAddress ?? null,
+        },
+        "Geocode result",
+      );
+      return { lat: coords.lat, lng: coords.lng, formattedAddress };
+    }
+  }
+
+  if (resolved.textSearch) {
+    const textSearchPayload = await mcpCall<unknown>({
+      url: mcpUrl,
+      apiKey: composioApiKey,
+      method: "tools/call",
+      params: {
+        name: resolved.textSearch.name,
+        arguments: buildTextSearchArgs(resolved.textSearch, query),
+      },
+      requestId,
+    });
+    const { places } = extractPlacesFromMcpResult(textSearchPayload);
+    const first = places[0];
+    if (first) {
+      const coords = extractLatLng(first);
+      const formattedAddress =
+        pickFirstString(
+          first.formattedAddress,
+          first.formatted_address,
+          first.address,
+        ) ?? undefined;
+      if (coords.lat !== undefined && coords.lng !== undefined) {
+        logger.info(
+          {
+            requestId,
+            latRounded: Math.round(coords.lat * 1000) / 1000,
+            lngRounded: Math.round(coords.lng * 1000) / 1000,
+            formattedAddress: formattedAddress ?? null,
+          },
+          "Geocode result",
+        );
+        return { lat: coords.lat, lng: coords.lng, formattedAddress };
+      }
+    }
+  }
+
+  logger.warn({ requestId, locationText: trimmed }, "Geocode returned no results");
+  return null;
 };
 
 export const geocodeLocationText = async (
@@ -172,59 +308,29 @@ export const geocodeLocationText = async (
   if (cached) {
     return cached;
   }
-
   const requestId = ctx.requestId ?? randomUUID();
-  const mcpUrl = (process.env.COMPOSIO_MCP_URL ?? "").trim().replace(/^"+|"+$/g, "");
-  const composioApiKey = process.env.COMPOSIO_API_KEY ?? "";
-  if (!mcpUrl) {
-    return { coords: null, formattedAddress: null, error: "Missing MCP URL." };
-  }
 
-  const tools = await listMcpTools({
-    url: mcpUrl,
-    apiKey: composioApiKey,
-    requestId,
-  });
-  const resolved = resolveMcpTools(tools);
-  const directTool = tools.find(
-    (tool) => tool.name.toLowerCase() === "google_maps_geocode_address_with_query",
-  );
-  const geocodeTool = directTool ?? resolved.geocode;
-  if (!geocodeTool) {
-    return { coords: null, formattedAddress: null, error: "No geocode tool found." };
-  }
+  try {
+    const resolved = await resolveLocationTextToCoords(trimmed, { ...ctx, requestId });
+    if (!resolved) {
+      const result = {
+        coords: null,
+        formattedAddress: null,
+        error: "No coordinates returned.",
+      };
+      setCachedResult(cacheKey, result);
+      return result;
+    }
 
-  const geocodePayload = await mcpCall<unknown>({
-    url: mcpUrl,
-    apiKey: composioApiKey,
-    method: "tools/call",
-    params: { name: geocodeTool.name, arguments: buildGeocodeArgs(geocodeTool, query) },
-    requestId,
-  });
-  const { payload } = resolveMcpPayloadFromResult(geocodePayload);
-  const coords = extractLatLng(payload ?? {});
-  const formattedAddress =
-    pickFirstString(
-      (payload as { formatted_address?: string })?.formatted_address,
-      (payload as { formattedAddress?: string })?.formattedAddress,
-      (payload as { address?: string })?.address,
-    ) ?? null;
-
-  if (coords.lat === undefined || coords.lng === undefined) {
-    const result = { coords: null, formattedAddress, error: "No coordinates returned." };
+    const result = {
+      coords: { lat: resolved.lat, lng: resolved.lng },
+      formattedAddress: resolved.formattedAddress ?? null,
+      error: null,
+    };
     setCachedResult(cacheKey, result);
     return result;
+  } catch (err) {
+    logger.warn({ err, requestId, locationText: trimmed }, "Geocode request failed");
+    return { coords: null, formattedAddress: null, error: "Geocode request failed." };
   }
-
-  const result = {
-    coords: { lat: coords.lat, lng: coords.lng },
-    formattedAddress,
-    error: null,
-  };
-  setCachedResult(cacheKey, result);
-  logger.info(
-    { requestId, locationText: query, lat: coords.lat, lng: coords.lng },
-    "Geocoded location text",
-  );
-  return result;
 };
