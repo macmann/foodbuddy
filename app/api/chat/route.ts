@@ -48,12 +48,17 @@ import {
   resolveSearchCoords,
   type SearchCoordsSource,
 } from "../../../lib/chat/searchCoords";
+import type { SessionPlace } from "../../../lib/chat/sessionMemory";
+import { getSessionMemory, updateSessionMemory } from "../../../lib/chat/sessionMemory";
+import { classifyIntent } from "../../../lib/chat/classifyIntent";
+import { resolvePlaceReference } from "../../../lib/chat/resolvePlaceReference";
 import { listMcpTools, mcpCall } from "../../../lib/mcp/client";
 import { resolveMcpPayloadFromResult } from "../../../lib/mcp/resultParser";
 import { resolveMcpTools } from "../../../lib/mcp/toolResolver";
 import type { ToolDefinition } from "../../../lib/mcp/types";
 import { buildFallbackNarration } from "../../../lib/narration/fallbackNarration";
 import { narratePlacesWithLLM } from "../../../lib/narration/narratePlaces";
+import { narrateSearchResults } from "../../../lib/narration/narrateSearchResults";
 import type {
   ChatResponse,
   RecommendationCardData,
@@ -91,6 +96,272 @@ const isError = (value: unknown): value is Error => value instanceof Error;
 
 const isAbortError = (error: unknown) =>
   error instanceof Error && error.name === "AbortError";
+
+const buildPlaceFollowUpMessage = ({
+  name,
+  rating,
+  distanceMeters,
+  types,
+  mapsUrl,
+}: {
+  name: string;
+  rating?: number;
+  distanceMeters?: number;
+  types?: string[];
+  mapsUrl?: string;
+}) => {
+  const highlights: string[] = [];
+  if (typeof rating === "number") {
+    highlights.push(`${rating.toFixed(1)}★`);
+  }
+  if (typeof distanceMeters === "number") {
+    highlights.push(`${Math.round(distanceMeters)}m away`);
+  }
+  if (types && types.length > 0) {
+    highlights.push(types[0].replace(/_/g, " "));
+  }
+  const highlightText = highlights.length > 0 ? highlights.join(", ") : "a solid pick";
+  const mapLine = mapsUrl ? ` Map: ${mapsUrl}` : "";
+  return `I think you mean ${name}. It stood out as ${highlightText} in your last search. Want more spots like this?${mapLine}`;
+};
+
+const mapSessionPlaceToRecommendation = (place: SessionPlace) => ({
+  placeId: place.placeId,
+  name: place.name,
+  rating: place.rating,
+  reviewCount: place.reviews,
+  address: place.address,
+  lat: place.lat,
+  lng: place.lng,
+  distanceMeters: place.distanceMeters,
+  mapsUrl: place.mapsUrl,
+  types: place.types,
+});
+
+const toSessionPlaces = (places: RecommendationCardData[]) =>
+  places.map((place) => ({
+    placeId: place.placeId,
+    name: place.name,
+    rating: place.rating,
+    reviews: place.reviewCount,
+    address: place.address,
+    lat: place.lat,
+    lng: place.lng,
+    distanceMeters: place.distanceMeters,
+    mapsUrl: place.mapsUrl,
+    types: place.types,
+  }));
+
+const applyLocalRefine = ({
+  message,
+  places,
+  extracted,
+}: {
+  message: string;
+  places: SessionPlace[];
+  extracted: {
+    budget?: "cheap" | "mid" | "high";
+    vibe?: string;
+    dietary?: string;
+  };
+}) => {
+  const normalized = message.toLowerCase();
+  const wantsCloser = /\b(closer|nearest|nearer)\b/.test(normalized);
+  const wantsHigherRated = /\b(higher rated|better rated|top rated|best rated)\b/.test(
+    normalized,
+  );
+  const budgetKeywords: Record<NonNullable<typeof extracted.budget>, string[]> = {
+    cheap: ["cheap", "budget", "inexpensive", "affordable"],
+    mid: ["mid", "moderate", "standard"],
+    high: ["fine dining", "upscale", "premium", "expensive"],
+  };
+  const filterKeywords = [
+    ...(extracted.budget ? budgetKeywords[extracted.budget] : []),
+    ...(extracted.vibe ? [extracted.vibe] : []),
+    ...(extracted.dietary ? [extracted.dietary] : []),
+  ].map((keyword) => keyword.toLowerCase());
+
+  let refined = places;
+  if (filterKeywords.length > 0) {
+    refined = refined.filter((place) => {
+      const haystack = [
+        place.name,
+        place.address,
+        ...(place.types ?? []),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return filterKeywords.some((keyword) => haystack.includes(keyword));
+    });
+  }
+
+  if (wantsCloser) {
+    refined = [...refined].sort((a, b) => {
+      const distanceA = a.distanceMeters ?? Number.POSITIVE_INFINITY;
+      const distanceB = b.distanceMeters ?? Number.POSITIVE_INFINITY;
+      return distanceA - distanceB;
+    });
+  } else if (wantsHigherRated) {
+    refined = [...refined].sort((a, b) => {
+      const ratingA = a.rating ?? -1;
+      const ratingB = b.rating ?? -1;
+      return ratingB - ratingA;
+    });
+  }
+
+  return refined;
+};
+
+const getPlaceMapsUrl = (place: { placeId?: string; mapsUrl?: string }) =>
+  place.mapsUrl ??
+  (place.placeId
+    ? `https://www.google.com/maps/search/?api=1&query_place_id=${encodeURIComponent(
+        place.placeId,
+      )}`
+    : undefined);
+
+const extractPreferenceUpdates = (message: string) => {
+  const normalized = message.toLowerCase();
+  const cuisine: string[] = [];
+  const vibe: string[] = [];
+  const dietary: string[] = [];
+  let budget: "cheap" | "mid" | "high" | undefined;
+
+  if (/\bspicy\b/.test(normalized)) {
+    vibe.push("spicy");
+  }
+  if (/\bquiet\b/.test(normalized)) {
+    vibe.push("quiet");
+  }
+  if (/\bhalal\b/.test(normalized)) {
+    dietary.push("halal");
+  }
+  if (/\bvegetarian\b/.test(normalized)) {
+    dietary.push("vegetarian");
+  }
+  if (/\bno pork\b/.test(normalized)) {
+    dietary.push("no pork");
+  }
+  if (/\bcheap\b|\bbudget\b|\baffordable\b/.test(normalized)) {
+    budget = "cheap";
+  }
+  if (/\bmid\b|\bmoderate\b/.test(normalized)) {
+    budget = budget ?? "mid";
+  }
+  if (/\bexpensive\b|\bhigh-end\b|\bupscale\b/.test(normalized)) {
+    budget = "high";
+  }
+
+  const cues = [/i like\b/, /i prefer\b/, /i love\b/, /i want\b/];
+  const hasCue = cues.some((cue) => cue.test(normalized));
+
+  if (!hasCue && !budget && vibe.length === 0 && dietary.length === 0) {
+    return null;
+  }
+
+  return {
+    cuisine: cuisine.length > 0 ? cuisine : undefined,
+    vibe: vibe.length > 0 ? vibe : undefined,
+    dietary: dietary.length > 0 ? dietary : undefined,
+    budget,
+  };
+};
+
+const mergePrefs = (
+  existing: { cuisine?: string[]; vibe?: string[]; dietary?: string[]; budget?: string } | undefined,
+  update: { cuisine?: string[]; vibe?: string[]; dietary?: string[]; budget?: string },
+) => {
+  const mergeList = (current?: string[], next?: string[]) => {
+    const merged = new Set([...(current ?? []), ...(next ?? [])]);
+    return merged.size > 0 ? [...merged] : undefined;
+  };
+  return {
+    cuisine: mergeList(existing?.cuisine, update.cuisine),
+    vibe: mergeList(existing?.vibe, update.vibe),
+    dietary: mergeList(existing?.dietary, update.dietary),
+    budget: update.budget ?? existing?.budget,
+  };
+};
+
+const buildPlaceHighlights = ({
+  place,
+  query,
+  prefs,
+}: {
+  place: RecommendationCardData;
+  query: string;
+  prefs?: { cuisine?: string[]; vibe?: string[]; dietary?: string[]; budget?: string };
+}) => {
+  const normalizedQuery = query.toLowerCase();
+  const typeHints = (place.types ?? []).map((type) => type.toLowerCase());
+  const keywordHints = [
+    "noodles",
+    "ramen",
+    "sushi",
+    "hotpot",
+    "dim sum",
+    "pizza",
+    "burger",
+    "bbq",
+    "coffee",
+    "tea",
+    "dessert",
+  ].filter((term) => normalizedQuery.includes(term));
+  const typeMap: Array<{ match: RegExp; hint: string }> = [
+    { match: /cafe|coffee/i, hint: "coffee" },
+    { match: /bakery|dessert/i, hint: "pastries" },
+    { match: /hotpot/i, hint: "hotpot" },
+    { match: /sushi/i, hint: "sushi" },
+    { match: /ramen|noodle/i, hint: "noodles" },
+    { match: /bbq|barbecue/i, hint: "bbq" },
+    { match: /bar/i, hint: "drinks" },
+  ];
+  const typeHint = typeMap.find((entry) =>
+    typeHints.some((type) => entry.match.test(type)),
+  )?.hint;
+  const prefHint =
+    prefs?.cuisine?.[0] ??
+    prefs?.dietary?.[0] ??
+    prefs?.vibe?.[0] ??
+    undefined;
+
+  const suggestion = keywordHints[0] ?? typeHint ?? prefHint;
+  const tryLine = suggestion
+    ? `People often go for ${suggestion} here—worth checking their popular dishes.`
+    : "People often go for their popular dishes here—worth checking what's recommended.";
+
+  const highlights: string[] = [];
+  if (typeof place.rating === "number") {
+    highlights.push(`${place.rating.toFixed(1)}★`);
+  }
+  if (typeof place.distanceMeters === "number") {
+    highlights.push(`${Math.round(place.distanceMeters)}m away`);
+  }
+  const whyLine =
+    highlights.length > 0
+      ? `Stands out for ${highlights.join(", ")}.`
+      : "Stood out in your last search.";
+
+  return { whyLine, tryLine };
+};
+
+const addWhyTryLines = ({
+  places,
+  query,
+  prefs,
+}: {
+  places: RecommendationCardData[];
+  query: string;
+  prefs?: { cuisine?: string[]; vibe?: string[]; dietary?: string[]; budget?: string };
+}) =>
+  places.map((place, index) => {
+    if (index > 1) {
+      return place;
+    }
+    const { whyLine, tryLine } = buildPlaceHighlights({ place, query, prefs });
+    return { ...place, whyLine, tryLine };
+  });
 
 type Attempt = {
   radius: number;
@@ -688,6 +959,10 @@ const buildChatResponse = ({
   locationLabel,
   radiusMeters,
   needsLocation,
+  mode,
+  suggestedPrompts,
+  followups,
+  isFollowUp,
 }: {
   status: ChatResponse["status"];
   message: string;
@@ -698,6 +973,10 @@ const buildChatResponse = ({
   locationLabel?: string;
   radiusMeters?: number;
   needsLocation?: boolean;
+  mode?: ChatResponse["meta"]["mode"];
+  suggestedPrompts?: ChatResponse["meta"]["suggestedPrompts"];
+  followups?: ChatResponse["meta"]["followups"];
+  isFollowUp?: boolean;
 }): ChatResponse => ({
   status,
   message: (() => {
@@ -713,14 +992,26 @@ const buildChatResponse = ({
     return sanitizedMessage || safeUserMessage(message, "Here are a few places you might like.");
   })(),
   places,
-  meta:
-    sessionId || nextPageToken || needsLocation
-      ? {
-          sessionId,
-          nextPageToken,
-          needs_location: needsLocation || undefined,
-        }
-      : undefined,
+  meta: {
+    mode:
+      mode ??
+      (needsLocation
+        ? "needs_location"
+        : isFollowUp
+          ? "place_followup"
+          : places.length === 0 && status === "ok"
+            ? "refine"
+            : "search"),
+    suggestedPrompts:
+      suggestedPrompts ??
+      (places.length > 0 && !needsLocation
+        ? ["cheap", "spicy", "family-friendly"]
+        : undefined),
+    followups,
+    sessionId,
+    nextPageToken,
+    needs_location: needsLocation || undefined,
+  },
 });
 
 const buildAgentResponse = ({
@@ -907,15 +1198,41 @@ export async function POST(request: Request) {
   }
 
   const intent = detectIntent(body.message);
+  const sessionMemory = sessionId ? getSessionMemory(sessionId) : null;
+  const classifiedIntent = await classifyIntent(body.message, sessionMemory);
   const searchSession = await getOrCreateSession({ sessionId, channel });
   const hasPendingRecommend =
     searchSession?.pendingAction === PENDING_ACTION_RECOMMEND;
   const shouldHandleSmallTalk =
     intent === "SMALL_TALK" && !(hasPendingRecommend && !isSmallTalkMessage(body.message));
 
+  const preferenceUpdate = extractPreferenceUpdates(body.message);
+  if (sessionId && (body.action === "set_pref" || preferenceUpdate)) {
+    const nextPrefs = mergePrefs(sessionMemory?.userPrefs, preferenceUpdate ?? {});
+    updateSessionMemory(sessionId, { userPrefs: nextPrefs });
+    if (body.action === "set_pref" || classifiedIntent.intent === "smalltalk") {
+      return respondChat(
+        200,
+        buildChatResponse({
+          status: "ok",
+          message: "Got it — I’ll keep that in mind for your next recommendations.",
+          places: [],
+          sessionId,
+          userMessage: body.message,
+          locationLabel: locationText,
+          radiusMeters,
+          mode: "smalltalk",
+        }),
+      );
+    }
+  }
+
   if (shouldHandleSmallTalk) {
     const smallTalkMessage =
       "Hi! Tell me what you’re craving, or ask for a cuisine near a place (e.g., 'dim sum near Yangon').";
+    if (sessionId) {
+      updateSessionMemory(sessionId, { lastIntent: "smalltalk" });
+    }
     return respondChat(
       200,
       buildChatResponse({
@@ -926,8 +1243,159 @@ export async function POST(request: Request) {
         userMessage: body.message,
         locationLabel: locationText,
         radiusMeters,
+        mode: "smalltalk",
       }),
     );
+  }
+
+  const shouldResolvePlace =
+    classifiedIntent.intent === "place_followup" || Boolean(classifiedIntent.extracted.placeName);
+  if (shouldResolvePlace && sessionMemory?.lastPlaces?.length) {
+    const resolved = resolvePlaceReference(body.message, sessionMemory.lastPlaces);
+    if (resolved && resolved.score >= 0.78) {
+      const mapsUrl = getPlaceMapsUrl(resolved.place);
+      const message = buildPlaceFollowUpMessage({
+        name: resolved.place.name,
+        rating: resolved.place.rating,
+        distanceMeters: resolved.place.distanceMeters,
+        types: resolved.place.types,
+        mapsUrl,
+      });
+      const followupPlace = addWhyTryLines({
+        places: [
+          {
+            placeId: resolved.place.placeId,
+            name: resolved.place.name,
+            rating: resolved.place.rating,
+            reviewCount: resolved.place.reviews,
+            address: resolved.place.address,
+            lat: resolved.place.lat,
+            lng: resolved.place.lng,
+            distanceMeters: resolved.place.distanceMeters,
+            mapsUrl,
+            types: resolved.place.types,
+          },
+        ],
+        query: sessionMemory?.lastQuery ?? body.message,
+        prefs: sessionMemory?.userPrefs,
+      })[0];
+      if (sessionId) {
+        updateSessionMemory(sessionId, { lastIntent: "place_followup" });
+      }
+      return respondChat(
+        200,
+        buildChatResponse({
+          status: "ok",
+          message,
+          places: followupPlace ? [followupPlace] : [],
+          sessionId,
+          userMessage: body.message,
+          locationLabel: locationText,
+          radiusMeters,
+          mode: "place_followup",
+        }),
+      );
+    }
+  }
+
+  if (classifiedIntent.intent === "refine" && sessionMemory?.lastPlaces?.length) {
+    const refinedPlaces = applyLocalRefine({
+      message: body.message,
+      places: sessionMemory.lastPlaces,
+      extracted: {
+        budget: classifiedIntent.extracted.budget,
+        vibe: classifiedIntent.extracted.vibe,
+        dietary: classifiedIntent.extracted.dietary,
+      },
+    });
+    if (refinedPlaces.length >= 3) {
+      const responsePlaces = addWhyTryLines({
+        places: refinedPlaces.map(mapSessionPlaceToRecommendation),
+        query: sessionMemory.lastQuery,
+        prefs: sessionMemory.userPrefs,
+      });
+      const narratedMessage = await narrateSearchResults({
+        userMessage: body.message,
+        locationLabel: sessionMemory.lastResolvedLocation?.label ?? locationText,
+        topPlaces: responsePlaces.slice(0, 3),
+        userPrefs: sessionMemory.userPrefs,
+        requestId,
+        timeoutMs: narrationTimeoutMs,
+      });
+      if (sessionId) {
+        updateSessionMemory(sessionId, {
+          lastPlaces: refinedPlaces,
+          lastQuery: sessionMemory.lastQuery,
+          lastResolvedLocation: sessionMemory.lastResolvedLocation,
+          lastIntent: "refine",
+        });
+      }
+      return respondChat(
+        200,
+        buildChatResponse({
+          status: "ok",
+          message: narratedMessage,
+          places: responsePlaces,
+          sessionId,
+          userMessage: body.message,
+          locationLabel: sessionMemory.lastResolvedLocation?.label ?? locationText,
+          radiusMeters,
+          mode: "refine",
+        }),
+      );
+    }
+
+    if (sessionMemory.lastResolvedLocation) {
+      const refinedKeyword = buildFoodSearchQuery(
+        [sessionMemory.lastQuery, body.message].filter(Boolean).join(" "),
+      );
+      const refinedRadius = searchSession?.lastRadiusM ?? radiusMeters;
+      const searchResult = await searchPlacesWithMcp({
+        keyword: refinedKeyword,
+        coords: {
+          lat: sessionMemory.lastResolvedLocation.lat,
+          lng: sessionMemory.lastResolvedLocation.lng,
+        },
+        radiusMeters: refinedRadius,
+        requestId,
+        locationText: sessionMemory.lastResolvedLocation.label,
+      });
+      const refinedPlaces = addWhyTryLines({
+        places: searchResult.places,
+        query: refinedKeyword,
+        prefs: sessionMemory.userPrefs,
+      });
+      const refinedMessage = await narrateSearchResults({
+        userMessage: body.message,
+        locationLabel: sessionMemory.lastResolvedLocation.label,
+        topPlaces: refinedPlaces.slice(0, 3),
+        userPrefs: sessionMemory.userPrefs,
+        requestId,
+        timeoutMs: narrationTimeoutMs,
+      });
+      if (sessionId) {
+        updateSessionMemory(sessionId, {
+          lastPlaces: toSessionPlaces(searchResult.places),
+          lastQuery: refinedKeyword,
+          lastResolvedLocation: sessionMemory.lastResolvedLocation,
+          lastIntent: "refine",
+        });
+      }
+      return respondChat(
+        200,
+        buildChatResponse({
+          status: "ok",
+          message: refinedMessage,
+          places: refinedPlaces,
+          sessionId,
+          nextPageToken: searchResult.nextPageToken,
+          userMessage: body.message,
+          locationLabel: sessionMemory.lastResolvedLocation.label,
+          radiusMeters: refinedRadius,
+          mode: "refine",
+        }),
+      );
+    }
   }
 
   if (isFollowUpRequest(body)) {
@@ -935,19 +1403,23 @@ export async function POST(request: Request) {
       ? await getFollowUpSession(body.sessionId)
       : null;
     if (!storedSession) {
-    return respondChat(
-      200,
-      buildChatResponse({
-        status: "ok",
-        message: "No more results yet — try a new search.",
-        places: [],
-        sessionId,
-        userMessage: body.message,
-        locationLabel: locationText,
-        radiusMeters,
-      }),
-    );
-  }
+      if (sessionId) {
+        updateSessionMemory(sessionId, { lastIntent: "place_followup" });
+      }
+      return respondChat(
+        200,
+        buildChatResponse({
+          status: "ok",
+          message: "No more results yet — try a new search.",
+          places: [],
+          sessionId,
+          userMessage: body.message,
+          locationLabel: locationText,
+          radiusMeters,
+          isFollowUp: true,
+        }),
+      );
+    }
 
     const followUp = await fetchMoreFromMcp({
       session: storedSession,
@@ -979,18 +1451,37 @@ export async function POST(request: Request) {
           timeoutMs: narrationTimeoutMs,
           fallbackMessage: followUpFallbackMessage,
         });
+    const annotatedFollowUps = addWhyTryLines({
+      places: followUp.places,
+      query: storedSession.lastQuery,
+      prefs: sessionMemory?.userPrefs,
+    });
+
+    if (sessionId) {
+      updateSessionMemory(sessionId, {
+        lastPlaces: toSessionPlaces(annotatedFollowUps),
+        lastQuery: storedSession.lastQuery,
+        lastResolvedLocation: {
+          lat: storedSession.lat,
+          lng: storedSession.lng,
+          label: locationText ?? "Current location",
+        },
+        lastIntent: "place_followup",
+      });
+    }
 
     return respondChat(
       200,
       buildChatResponse({
         status: "ok",
         message: followUpMessage,
-        places: followUp.places,
+        places: annotatedFollowUps,
         sessionId: storedSession.id,
         nextPageToken: followUp.nextPageToken,
         userMessage: body.message,
         locationLabel: locationText,
         radiusMeters: followUp.usedRadius ?? storedSession.radius,
+        isFollowUp: true,
       }),
     );
   }
@@ -1063,6 +1554,13 @@ export async function POST(request: Request) {
       },
       "Location resolution decision",
     );
+    if (sessionId) {
+      updateSessionMemory(sessionId, {
+        lastQuery: buildFoodSearchQuery(keyword),
+        lastResolvedLocation: null,
+        lastIntent: "refine",
+      });
+    }
     return respondChat(
       200,
       buildChatResponse({
@@ -1110,6 +1608,13 @@ export async function POST(request: Request) {
       searchCoords = reqCoords;
       coordsSource = "request_coords";
     } else {
+      if (sessionId) {
+        updateSessionMemory(sessionId, {
+          lastQuery: buildFoodSearchQuery(keyword),
+          lastResolvedLocation: null,
+          lastIntent: "refine",
+        });
+      }
       return respondChat(
         200,
         buildChatResponse({
@@ -1139,6 +1644,13 @@ export async function POST(request: Request) {
       action: PENDING_ACTION_RECOMMEND,
       keyword,
     });
+    if (sessionId) {
+      updateSessionMemory(sessionId, {
+        lastQuery: buildFoodSearchQuery(keyword),
+        lastResolvedLocation: null,
+        lastIntent: "refine",
+      });
+    }
     return respondChat(
       200,
       buildChatResponse({
@@ -1205,29 +1717,40 @@ export async function POST(request: Request) {
     nextPageToken: searchResult.nextPageToken ?? null,
   });
 
-  const searchFallbackMessage =
-    searchResult.places.length > 0
-      ? "Here are a few places you might like."
-      : "I couldn’t find food places for that. Try a different keyword (e.g., 'hotpot', 'noodle', 'dim sum').";
-  const narratedMessage = searchResult.assistantMessage
-    ? safeUserMessage(searchResult.assistantMessage, searchFallbackMessage)
-    : await buildNarratedMessage({
-        query: keyword,
-        userMessage: body.message,
-        locationLabel: resolvedLocationLabel,
-        places: searchResult.places,
-        locale,
-        requestId,
-        timeoutMs: narrationTimeoutMs,
-        fallbackMessage: searchFallbackMessage,
-      });
+  const sessionPrefs = sessionId ? getSessionMemory(sessionId)?.userPrefs : undefined;
+  const annotatedPlaces = addWhyTryLines({
+    places: searchResult.places,
+    query: keyword,
+    prefs: sessionPrefs,
+  });
+  const narratedMessage = await narrateSearchResults({
+    userMessage: body.message,
+    locationLabel: resolvedLocationLabel ?? searchLocationText ?? locationText,
+    topPlaces: annotatedPlaces.slice(0, 3),
+    userPrefs: sessionPrefs,
+    requestId,
+    timeoutMs: narrationTimeoutMs,
+  });
+
+  if (sessionId) {
+      updateSessionMemory(sessionId, {
+        lastPlaces: toSessionPlaces(annotatedPlaces),
+        lastQuery: buildFoodSearchQuery(keyword),
+        lastResolvedLocation: {
+          lat: searchCoords.lat,
+        lng: searchCoords.lng,
+        label: resolvedLocationLabel ?? searchLocationText ?? locationText ?? "Current location",
+      },
+      lastIntent: searchResult.places.length > 0 ? "search" : "refine",
+    });
+  }
 
   return respondChat(
     200,
     buildChatResponse({
       status: "ok",
-      message: confirmMessage ? `${confirmMessage} ${narratedMessage}` : narratedMessage,
-      places: searchResult.places,
+          message: confirmMessage ? `${confirmMessage} ${narratedMessage}` : narratedMessage,
+          places: annotatedPlaces,
       sessionId,
       nextPageToken: searchResult.nextPageToken,
       userMessage: body.message,
