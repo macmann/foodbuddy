@@ -1659,8 +1659,11 @@ export async function POST(request: Request) {
         requestId,
         locationText: sessionMemory.lastResolvedLocation.label,
       });
+      const withCoords = searchResult.places.filter(
+        (place) => typeof place.lat === "number" && typeof place.lng === "number",
+      );
       const enrichedPlaces = await enrichPlaces({
-        places: searchResult.places,
+        places: withCoords,
         origin: {
           lat: sessionMemory.lastResolvedLocation.lat,
           lng: sessionMemory.lastResolvedLocation.lng,
@@ -1747,8 +1750,11 @@ export async function POST(request: Request) {
       followUp.places.length > 0
         ? "Here are more places you might like."
         : "No more results yet — try a new search.";
+    const withCoords = followUp.places.filter(
+      (place) => typeof place.lat === "number" && typeof place.lng === "number",
+    );
     const enrichedFollowUps = await enrichPlaces({
-      places: followUp.places,
+      places: withCoords,
       origin: { lat: storedSession.lat, lng: storedSession.lng },
     });
     const followUpMessage = followUp.assistantMessage
@@ -2075,19 +2081,22 @@ export async function POST(request: Request) {
   });
 
   const sessionPrefs = sessionId ? getSessionMemory(sessionId)?.userPrefs : undefined;
-    const enrichedPlaces = await enrichPlaces({
-      places: searchResult.places,
-      origin: searchCoords,
-    });
-    const annotatedPlaces = addWhyTryLines({
-      places: enrichedPlaces,
-      query: keyword,
-      prefs: sessionPrefs,
-    });
-    const narratedMessage = await narrateSearchResults({
-      userMessage: body.message,
-      locationLabel: resolvedLocationLabel ?? searchLocationText ?? locationText,
-      topPlaces: annotatedPlaces.slice(0, 3),
+  const withCoords = searchResult.places.filter(
+    (place) => typeof place.lat === "number" && typeof place.lng === "number",
+  );
+  const enrichedPlaces = await enrichPlaces({
+    places: withCoords,
+    origin: searchCoords,
+  });
+  const annotatedPlaces = addWhyTryLines({
+    places: enrichedPlaces,
+    query: keyword,
+    prefs: sessionPrefs,
+  });
+  const narratedMessage = await narrateSearchResults({
+    userMessage: body.message,
+    locationLabel: resolvedLocationLabel ?? searchLocationText ?? locationText,
+    topPlaces: annotatedPlaces.slice(0, 3),
     userPrefs: sessionPrefs,
     requestId,
     timeoutMs: narrationTimeoutMs,
@@ -2458,8 +2467,11 @@ export async function POST(request: Request) {
       );
     }
     payload = safetyFiltered.kept;
+    const withCoords = payload.filter(
+      (place) => typeof place.lat === "number" && typeof place.lng === "number",
+    );
     payload = await enrichPlaces({
-      places: payload,
+      places: withCoords,
       origin: resolvedCoords,
     });
     const recommendedPlaceIds = payload.map((item) => item.placeId);

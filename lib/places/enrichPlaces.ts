@@ -6,13 +6,26 @@ import type { RecommendationCardData } from "../types/chat";
 
 type FoodBuddySource = "foodbuddy_curated" | "google_enriched" | "google";
 
-export type EnrichedRecommendation = Omit<RecommendationCardData, "rating"> & {
+type RecommendationWithCoords = RecommendationCardData & { lat: number; lng: number };
+
+export type EnrichedRecommendation = Omit<
+  RecommendationWithCoords,
+  "rating"
+> & {
   rating: number | undefined;
   sourceLabel: FoodBuddySource;
   foodbuddyRatingAvg?: number;
   foodbuddyRatingCount?: number;
   foodbuddySummary?: string | null;
 };
+
+const hasNumericCoords = <T extends { lat?: unknown; lng?: unknown }>(
+  place: T,
+): place is T & { lat: number; lng: number } =>
+  typeof place.lat === "number" &&
+  Number.isFinite(place.lat) &&
+  typeof place.lng === "number" &&
+  Number.isFinite(place.lng);
 
 const normalizeTags = (value: unknown): string[] | undefined => {
   if (!Array.isArray(value)) {
@@ -32,7 +45,7 @@ const buildAggregatePayload = (aggregate?: PlaceAggregate | null) =>
     : {};
 
 const buildCuratedRecommendation = (
-  place: Place,
+  place: Place & { lat: number; lng: number },
   aggregate?: PlaceAggregate | null,
   origin?: { lat: number; lng: number },
 ): EnrichedRecommendation => {
@@ -59,7 +72,7 @@ const buildCuratedRecommendation = (
 };
 
 const buildEnrichedRecommendation = (
-  place: RecommendationCardData,
+  place: RecommendationWithCoords,
   aggregate?: PlaceAggregate | null,
 ): EnrichedRecommendation => {
   const aggregatePayload = buildAggregatePayload(aggregate);
@@ -83,11 +96,14 @@ export const enrichPlaces = async ({
   includeCurated?: boolean;
   curatedLimit?: number;
 }): Promise<EnrichedRecommendation[]> => {
-  if (places.length === 0 && !includeCurated) {
+  const placesWithCoords = places.filter(hasNumericCoords);
+  if (placesWithCoords.length === 0 && !includeCurated) {
     return [];
   }
 
-  const placeIds = Array.from(new Set(places.map((place) => place.placeId)));
+  const placeIds = Array.from(
+    new Set(placesWithCoords.map((place) => place.placeId)),
+  );
   const dbPlaces = placeIds.length
     ? await prisma.place.findMany({
         where: {
@@ -116,7 +132,7 @@ export const enrichPlaces = async ({
     aggregateByPlaceId.set(aggregate.placeId, aggregate);
   });
 
-  const enriched = places.map((place) => {
+  const enriched = placesWithCoords.map((place) => {
     const matched = placeByExternalId.get(place.placeId);
     const aggregate = matched ? aggregateByPlaceId.get(matched.placeId) : undefined;
     return buildEnrichedRecommendation(place, aggregate);
@@ -131,9 +147,12 @@ export const enrichPlaces = async ({
     take: curatedLimit,
     orderBy: { updatedAt: "desc" },
   });
-  const curatedAggregates = curatedPlaces.length
+  const curatedPlacesWithCoords = curatedPlaces.filter(hasNumericCoords);
+  const curatedAggregates = curatedPlacesWithCoords.length
     ? await prisma.placeAggregate.findMany({
-        where: { placeId: { in: curatedPlaces.map((place) => place.placeId) } },
+        where: {
+          placeId: { in: curatedPlacesWithCoords.map((place) => place.placeId) },
+        },
       })
     : [];
   const curatedAggregateMap = new Map<string, PlaceAggregate>();
@@ -141,7 +160,7 @@ export const enrichPlaces = async ({
     curatedAggregateMap.set(aggregate.placeId, aggregate);
   });
 
-  const curatedRecommendations = curatedPlaces.map((place) =>
+  const curatedRecommendations = curatedPlacesWithCoords.map((place) =>
     buildCuratedRecommendation(place, curatedAggregateMap.get(place.placeId), origin),
   );
 
