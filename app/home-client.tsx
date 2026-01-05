@@ -16,6 +16,7 @@ type ChatMessage = MessageBubbleData & {
   visiblePlacesCount?: number;
   status?: ChatResponse["status"];
   responseError?: boolean;
+  meta?: ChatResponse["meta"];
 };
 
 const isRecommendationCard = (
@@ -34,6 +35,7 @@ const getRandomPlaceholder = () =>
   PLACEHOLDER_OPTIONS[Math.floor(Math.random() * PLACEHOLDER_OPTIONS.length)];
 const DEFAULT_RADIUS_M = 1500;
 const PLACE_INCREMENT = 3;
+const LIST_QNA_CHIPS = ["Closest", "Top rated", "Most popular", "Recommend one"];
 
 const getMapsUrl = (place: RecommendationCardData) =>
   place.mapsUrl ??
@@ -294,6 +296,7 @@ export default function HomePageClient() {
         responseError,
         error: normalizedStatus === "error",
         createdAt: Date.now(),
+        meta: data.meta,
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -463,10 +466,31 @@ export default function HomePageClient() {
                 visiblePlacesCount,
                 visiblePlacesCount + 4,
               );
+              const highlights = message.meta?.highlights ?? [];
+              const showListQnaHighlights =
+                message.meta?.mode === "list_qna" && highlights.length > 0;
+              const showListQnaChips = message.meta?.mode === "list_qna";
 
               return (
                 <div key={message.id} className="space-y-3">
                   <MessageBubble message={message} onRetry={handleRetry}>
+                    {showListQnaHighlights && (
+                      <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600 shadow-sm">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                          Highlights
+                        </p>
+                        <div className="mt-2 space-y-2">
+                          {highlights.map((highlight, index) => (
+                            <div key={`${highlight.title}-${index}`}>
+                              <p className="text-xs font-semibold text-slate-700">
+                                {highlight.title}
+                              </p>
+                              <p className="text-xs text-slate-600">{highlight.details}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     {visiblePlaces.length > 0 && (
                       <div className="mt-3 grid gap-3">
                         {visiblePlaces.map((place) => (
@@ -504,6 +528,21 @@ export default function HomePageClient() {
                             </a>
                           );
                         })}
+                      </div>
+                    )}
+                    {showListQnaChips && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {LIST_QNA_CHIPS.map((chip) => (
+                          <button
+                            key={chip}
+                            type="button"
+                            disabled={loading}
+                            onClick={() => sendMessage(chip)}
+                            className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {chip}
+                          </button>
+                        ))}
                       </div>
                     )}
                     {message.role === "assistant" &&

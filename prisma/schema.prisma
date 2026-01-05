@@ -132,6 +132,7 @@ model SearchSession {
   lastRadiusM   Int?
   lastQuery     String?
   nextPageToken String?
+  lastPlaces    Json?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }

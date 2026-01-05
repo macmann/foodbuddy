@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import type { PlaceMini } from "./chat/listQna";
 import { prisma } from "./db";
 import { logger } from "./logger";
 
@@ -12,6 +13,7 @@ export type SearchSessionState = {
   lastRadiusM?: number | null;
   lastQuery?: string | null;
   nextPageToken?: string | null;
+  lastPlaces?: PlaceMini[] | null;
 };
 
 let missingSearchSessionTableLogged = false;
@@ -61,6 +63,9 @@ const buildSessionPayload = (state: SearchSessionState) => {
   if (state.nextPageToken !== undefined) {
     payload.nextPageToken = state.nextPageToken ?? null;
   }
+  if (state.lastPlaces !== undefined) {
+    payload.lastPlaces = state.lastPlaces ?? null;
+  }
   return payload;
 };
 
@@ -79,6 +84,7 @@ export const upsertSearchSession = async (state: SearchSessionState) => {
         lastRadiusM: state.lastRadiusM ?? null,
         lastQuery: state.lastQuery ?? null,
         nextPageToken: state.nextPageToken ?? null,
+        lastPlaces: state.lastPlaces ?? null,
       },
       update: payload,
     });

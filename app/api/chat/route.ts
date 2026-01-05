@@ -13,6 +13,13 @@ import { haversineMeters } from "../../../lib/reco/scoring";
 import { getLLMSettings } from "../../../lib/settings/llm";
 import { isAllowedModel } from "../../../lib/agent/model";
 import { detectIntent, isSmallTalkMessage } from "../../../lib/chat/intent";
+import {
+  answerFromLastPlaces,
+  coercePlaceMiniList,
+  isListQuestion,
+  toPlaceMini,
+  toRecommendationCardData,
+} from "../../../lib/chat/listQna";
 import { normalizeMcpPlace } from "../../../lib/places/normalizeMcpPlace";
 import {
   buildNearbySearchArgs,
@@ -723,6 +730,34 @@ const buildChatResponse = ({
       : undefined,
 });
 
+const buildListQnaResponse = ({
+  message,
+  places,
+  sessionId,
+  highlights,
+  referencedPlaceIds,
+  needsLocation,
+}: {
+  message: string;
+  places: RecommendationCardData[];
+  sessionId?: string;
+  highlights?: { title: string; details: string }[];
+  referencedPlaceIds?: string[];
+  needsLocation?: boolean;
+}): ChatResponse => ({
+  status: "ok",
+  message: safeUserMessage(message, "Here’s what I found from your last list."),
+  places,
+  meta: {
+    sessionId,
+    mode: "list_qna",
+    highlights,
+    referencedPlaceIds,
+    source: "session_last_places",
+    needs_location: needsLocation || undefined,
+  },
+});
+
 const buildAgentResponse = ({
   agentMessage,
   recommendations,
@@ -930,6 +965,40 @@ export async function POST(request: Request) {
     );
   }
 
+  const sessionPlaces = coercePlaceMiniList(searchSession?.lastPlaces);
+  if (isListQuestion(body.message)) {
+    const listResult = answerFromLastPlaces({
+      message: body.message,
+      lastPlaces: sessionPlaces,
+    });
+    const rankedPlaces = (listResult.rankedPlaces ?? sessionPlaces).map(
+      toRecommendationCardData,
+    );
+    if (sessionPlaces.length > 0) {
+      logger.info(
+        {
+          ...logContext,
+          mode: "list_qna",
+          lastPlacesCount: sessionPlaces.length,
+          detectedIntent: listResult.detectedIntent,
+          no_mcp_call: true,
+        },
+        "List Q&A answered from session places",
+      );
+    }
+    return respondChat(
+      200,
+      buildListQnaResponse({
+        message: listResult.summary,
+        places: rankedPlaces,
+        sessionId,
+        highlights: listResult.highlights,
+        referencedPlaceIds: listResult.referencedPlaceIds,
+        needsLocation: listResult.needsLocation,
+      }),
+    );
+  }
+
   if (isFollowUpRequest(body)) {
     const storedSession = body.sessionId
       ? await getFollowUpSession(body.sessionId)
@@ -961,6 +1030,7 @@ export async function POST(request: Request) {
       lastLng: storedSession.lng,
       lastRadiusM: followUp.usedRadius ?? storedSession.radius,
       nextPageToken: followUp.nextPageToken ?? null,
+      lastPlaces: followUp.places.map(toPlaceMini),
     });
 
     const followUpFallbackMessage =
@@ -1203,6 +1273,7 @@ export async function POST(request: Request) {
     lastLng: searchCoords.lng,
     lastRadiusM: parsedRadius,
     nextPageToken: searchResult.nextPageToken ?? null,
+    lastPlaces: searchResult.places.map(toPlaceMini),
   });
 
   const searchFallbackMessage =
@@ -1434,6 +1505,7 @@ export async function POST(request: Request) {
             lastLng: resolvedCoords.lng,
             lastRadiusM: radiusMeters,
             nextPageToken: existingSession?.nextPageToken ?? null,
+            lastPlaces: recommendations.map(toPlaceMini),
           });
         }
 
@@ -1637,6 +1709,7 @@ export async function POST(request: Request) {
       lastLng: resolvedCoords.lng,
       lastRadiusM: radiusMeters,
       nextPageToken: null,
+      lastPlaces: payload.map(toPlaceMini),
     });
 
     if (llmTimedOut) {

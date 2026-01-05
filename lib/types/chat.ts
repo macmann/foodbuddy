@@ -24,5 +24,9 @@ export type ChatResponse = {
     sessionId?: string;
     nextPageToken?: string;
     needs_location?: boolean;
+    mode?: "list_qna";
+    highlights?: { title: string; details: string }[];
+    referencedPlaceIds?: string[];
+    source?: string;
   };
 };
