@@ -666,7 +666,7 @@ export const searchPlacesWithMcp = async ({
     {
       query: queryBase,
       places,
-      coords,
+      coords: coords ?? undefined,
       locationText,
       radiusMeters,
       requestId,
