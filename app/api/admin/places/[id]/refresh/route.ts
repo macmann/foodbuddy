@@ -4,7 +4,7 @@ import { resolvePlacesProvider } from "../../../../../../lib/places";
 
 export const POST = async (
   _request: Request,
-  { params }: { params: Promise<{ placeId: string }> },
+  { params }: { params: Promise<{ id: string }> },
 ) => {
   const selection = resolvePlacesProvider();
   if (!selection.provider) {
@@ -14,8 +14,8 @@ export const POST = async (
     );
   }
   const provider = selection.provider;
-  const { placeId } = await params;
-  const details = await provider.placeDetails(placeId);
+  const { id } = await params;
+  const details = await provider.placeDetails(id);
 
   if (!details) {
     return NextResponse.json({ ok: false }, { status: 404 });
