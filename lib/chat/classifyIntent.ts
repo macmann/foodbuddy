@@ -1,4 +1,4 @@
-import { callOpenAI } from "../agent/openaiClient";
+import { callOpenAI, type LlmMessage } from "../agent/openaiClient";
 import { getLLMSettings } from "../settings/llm";
 import { logger } from "../logger";
 import type { SessionMemory } from "./sessionMemory";
@@ -198,7 +198,7 @@ export const classifyIntent = async (
     "Use needs_location when the user wants recommendations but no location is provided.",
   ].join("\n");
 
-  const messages = [
+  const messages: LlmMessage[] = [
     { role: "system", content: systemPrompt },
     {
       role: "user",
