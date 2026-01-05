@@ -95,6 +95,51 @@ const extractStatusCode = (payload: unknown): number | undefined => {
 const hasIncludedTypesError = (error?: string) =>
   error?.toLowerCase().includes(INVALID_INCLUDED_TYPES_ERROR) ?? false;
 
+const CUISINE_QUERY_TERMS = [
+  "chinese",
+  "thai",
+  "korean",
+  "japanese",
+  "bbq",
+  "barbecue",
+  "hotpot",
+  "hot pot",
+  "noodle",
+  "noodles",
+  "dim sum",
+  "sushi",
+  "ramen",
+  "pho",
+  "biryani",
+  "pizza",
+  "burger",
+  "seafood",
+  "steak",
+  "taco",
+  "mexican",
+  "italian",
+  "indian",
+  "burmese",
+  "myanmar",
+  "vietnamese",
+];
+
+const isCuisineQuery = (keyword: string) => {
+  const normalized = keyword.toLowerCase();
+  if (normalized.includes("food")) {
+    return true;
+  }
+  return CUISINE_QUERY_TERMS.some((term) => normalized.includes(term));
+};
+
+const normalizeCuisineKeyword = (keyword: string) => {
+  const cleaned = keyword.replace(/\bfood\b/gi, " ").replace(/\s+/g, " ").trim();
+  if (!/restaurant/i.test(cleaned)) {
+    return `${cleaned} restaurant`.trim();
+  }
+  return cleaned;
+};
+
 export const formatErrorSnippet = (error?: string) => {
   if (!error) {
     return undefined;
@@ -447,8 +492,20 @@ export const searchPlacesWithMcp = async ({
   const resolvedTools = resolveMcpTools(tools);
   const normalizedKeyword = buildFoodSearchQuery(keyword);
   const intentKeyword = keyword.trim().length > 0 ? keyword.trim() : "restaurant";
+  const cuisineQuery = isCuisineQuery(intentKeyword);
+  const normalizedCuisineKeyword = cuisineQuery
+    ? normalizeCuisineKeyword(intentKeyword)
+    : intentKeyword;
+  const locationLabel =
+    typeof locationText === "string" && locationText.trim().length > 0
+      ? locationText.trim()
+      : "current location";
+  const cuisineQueryOverride = cuisineQuery
+    ? `${normalizedCuisineKeyword} near ${locationLabel}`
+    : undefined;
   const preferTextSearch =
-    !forceNearbySearch && (Boolean(locationText) || hasExplicitLocationPhrase(keyword));
+    !forceNearbySearch &&
+    (cuisineQuery || Boolean(locationText) || hasExplicitLocationPhrase(keyword));
   const selectedTool = preferTextSearch
     ? resolvedTools.textSearch ?? resolvedTools.nearbySearch
     : resolvedTools.nearbySearch ?? resolvedTools.textSearch;
@@ -470,6 +527,56 @@ export const searchPlacesWithMcp = async ({
   const queryBase = normalizedKeyword.trim().length > 0 ? normalizedKeyword.trim() : "restaurants";
   const maxResultCount = 12;
   let retriedWithTextSearch = false;
+  let fallbackMessage: string | null = null;
+
+  const runTextSearch = async ({
+    query,
+    queryOverride,
+    fallbackTag,
+  }: {
+    query: string;
+    queryOverride?: string;
+    fallbackTag?: string;
+  }) => {
+    const tool = resolvedTools.textSearch;
+    if (!tool) {
+      return null;
+    }
+    const response = await mcpCall<unknown>({
+      url: mcpUrl,
+      apiKey: composioApiKey,
+      method: "tools/call",
+      params: {
+        name: tool.name,
+        arguments: (() => {
+          const { args, query: resolvedQuery, includedTypes } = buildTextSearchArgs(tool, {
+            query,
+            queryOverride,
+            location: coords,
+            locationText,
+            radiusMeters,
+            maxResultCount,
+            includedTypesOverride: placeTypes,
+          });
+          logger.info(
+            {
+              requestId,
+              selectedToolName: tool.name,
+              usedMode: "text",
+              query: resolvedQuery,
+              includedTypes,
+              radiusMeters,
+              fallback: fallbackTag ?? null,
+            },
+            "MCP search request",
+          );
+          return args;
+        })(),
+      },
+      requestId,
+    });
+    return response;
+  };
 
   const payload =
     selectedTool.name === resolvedTools.textSearch?.name
@@ -481,7 +588,8 @@ export const searchPlacesWithMcp = async ({
             name: selectedTool.name,
             arguments: (() => {
               const { args, query, includedTypes } = buildTextSearchArgs(selectedTool, {
-                query: intentKeyword,
+                query: normalizedCuisineKeyword,
+                queryOverride: cuisineQueryOverride,
                 location: coords,
                 radiusMeters,
                 locationText,
@@ -538,6 +646,14 @@ export const searchPlacesWithMcp = async ({
 
   let { payload: parsedPayload } = resolveMcpPayloadFromResult(payload);
   let { places, successfull, error } = extractPlacesFromMcp(payload);
+  logger.info(
+    {
+      requestId,
+      mcpPlacesRawCount: places.length,
+      selectedToolName: selectedTool.name,
+    },
+    "MCP search response parsed",
+  );
   const rankingResult = await rankMcpPlacesByRelevance(
     {
       query: queryBase,
@@ -552,7 +668,40 @@ export const searchPlacesWithMcp = async ({
   places = rankingResult.rankedPlaces;
   const isNearbySearch = selectedTool.name === resolvedTools.nearbySearch?.name;
   const hasTextSearchTool = Boolean(resolvedTools.textSearch);
-  let usedFallback = false;
+  if (
+    cuisineQuery &&
+    isNearbySearch &&
+    hasTextSearchTool &&
+    places.length === 0 &&
+    !retriedWithTextSearch
+  ) {
+    retriedWithTextSearch = true;
+    logger.info(
+      {
+        requestId,
+        originalTool: selectedTool.name,
+        fallbackTool: resolvedTools.textSearch?.name,
+      },
+      "MCP nearby search returned empty; retrying with text search",
+    );
+    const fallbackPayload = await runTextSearch({
+      query: normalizedCuisineKeyword,
+      queryOverride: cuisineQueryOverride,
+      fallbackTag: "nearby_empty_cuisine",
+    });
+    if (fallbackPayload) {
+      const fallbackParsed = resolveMcpPayloadFromResult(fallbackPayload);
+      const fallbackResult = extractPlacesFromMcp(fallbackPayload);
+      if (fallbackResult.successfull !== false) {
+        parsedPayload = fallbackParsed.payload;
+        places = fallbackResult.places;
+        successfull = fallbackResult.successfull;
+        error = fallbackResult.error;
+        fallbackMessage =
+          "I switched to a text search to better match the cuisine. Here are some options.";
+      }
+    }
+  }
 
   if (
     shouldRetryWithTextSearch({
@@ -575,43 +724,13 @@ export const searchPlacesWithMcp = async ({
       "MCP nearby search failed; retrying with text search",
     );
 
-    const fallbackTool = resolvedTools.textSearch;
-    if (fallbackTool) {
-      const fallbackKeyword =
-        keyword.trim().length > 0 ? keyword.trim() : "restaurant";
-      const fallbackPayload = await mcpCall<unknown>({
-        url: mcpUrl,
-        apiKey: composioApiKey,
-        method: "tools/call",
-        params: {
-          name: fallbackTool.name,
-          arguments: (() => {
-            const { args, query, includedTypes } = buildTextSearchArgs(fallbackTool, {
-              query: fallbackKeyword,
-              location: coords,
-              locationText,
-              radiusMeters,
-              maxResultCount,
-              includedTypesOverride: placeTypes,
-            });
-            logger.info(
-              {
-                requestId,
-                selectedToolName: fallbackTool.name,
-                usedMode: "text",
-                query,
-                includedTypes,
-                radiusMeters,
-                fallback: true,
-              },
-              "MCP search request",
-            );
-            return args;
-          })(),
-        },
-        requestId,
-      });
-
+    const fallbackKeyword =
+      keyword.trim().length > 0 ? keyword.trim() : "restaurant";
+    const fallbackPayload = await runTextSearch({
+      query: fallbackKeyword,
+      fallbackTag: "nearby_error",
+    });
+    if (fallbackPayload) {
       const fallbackParsed = resolveMcpPayloadFromResult(fallbackPayload);
       const fallbackResult = extractPlacesFromMcp(fallbackPayload);
       if (fallbackResult.successfull !== false) {
@@ -619,7 +738,32 @@ export const searchPlacesWithMcp = async ({
         places = fallbackResult.places;
         successfull = fallbackResult.successfull;
         error = fallbackResult.error;
-        usedFallback = true;
+        if (!fallbackMessage) {
+          fallbackMessage =
+            "I had trouble with nearby filtering, so I searched by text instead. Here are some options.";
+        }
+      }
+    }
+  }
+
+  if (cuisineQuery && hasTextSearchTool && places.length === 0) {
+    const broadenedPayload = await runTextSearch({
+      query: "restaurants",
+      queryOverride: `restaurants near ${locationLabel}`,
+      fallbackTag: "cuisine_broaden",
+    });
+    if (broadenedPayload) {
+      const broadenedParsed = resolveMcpPayloadFromResult(broadenedPayload);
+      const broadenedResult = extractPlacesFromMcp(broadenedPayload);
+      if (broadenedResult.successfull !== false) {
+        parsedPayload = broadenedParsed.payload;
+        places = broadenedResult.places;
+        successfull = broadenedResult.successfull;
+        error = broadenedResult.error;
+        if (!fallbackMessage) {
+          fallbackMessage =
+            "I broadened the search to nearby restaurants so you have some options.";
+        }
       }
     }
   }
@@ -638,7 +782,13 @@ export const searchPlacesWithMcp = async ({
     retryModeUsed?: string | null,
   ) => {
     const maxDistanceMeters = Math.max(radiusMeters * 4, 8_000);
-    const candidateDistances = items.slice(0, 3).map((place) => {
+    const itemsWithCoords = items.filter(
+      (place) => typeof place.lat === "number" && typeof place.lng === "number",
+    );
+    const itemsWithoutCoords = items.filter(
+      (place) => typeof place.lat !== "number" || typeof place.lng !== "number",
+    );
+    const candidateDistances = itemsWithCoords.slice(0, 3).map((place) => {
       if (typeof place.lat !== "number" || typeof place.lng !== "number") {
         return null;
       }
@@ -646,13 +796,14 @@ export const searchPlacesWithMcp = async ({
     });
     const result = filterByMaxDistance(
       coords,
-      items,
+      itemsWithCoords,
       (place) =>
         typeof place.lat === "number" && typeof place.lng === "number"
           ? { lat: place.lat, lng: place.lng }
           : null,
       maxDistanceMeters,
     );
+    const kept = [...result.kept, ...itemsWithoutCoords];
     logger.info(
       {
         requestId,
@@ -661,13 +812,15 @@ export const searchPlacesWithMcp = async ({
         radiusMeters,
         maxDistanceMeters,
         candidateDistances,
-        droppedCount: result.droppedCount,
+        placesWithGeometryCount: itemsWithCoords.length,
+        keptWithoutDistanceCount: itemsWithoutCoords.length,
+        droppedForDistanceCount: result.droppedCount,
         retryModeUsed: retryModeUsed ?? null,
         maxKeptDistance: result.maxKeptDistance,
       },
       "Applied MCP distance safety net",
     );
-    return result;
+    return { ...result, kept };
   };
 
   const initialSafety = applyDistanceSafetyNet(normalized);
@@ -764,10 +917,6 @@ export const searchPlacesWithMcp = async ({
     initialSafety.droppedCount > 0 && normalized.length === 0
       ? "I couldn’t find reliable nearby matches for that location. Try widening your radius or share a more specific neighborhood."
       : null;
-  const fallbackMessage =
-    usedFallback && normalized.length > 0
-      ? "I had trouble with nearby filtering, so I searched by text instead. Here are some options."
-      : null;
   const emptyExplicitLocationMessage =
     usedDistanceFallback &&
     normalized.length === 0 &&
@@ -778,7 +927,7 @@ export const searchPlacesWithMcp = async ({
       : null;
 
   const message = (() => {
-    if (fallbackMessage) return fallbackMessage;
+    if (fallbackMessage && normalized.length > 0) return fallbackMessage;
     if (normalized.length > 0) return "Here are a few places you might like.";
     return (
       emptyExplicitLocationMessage ??

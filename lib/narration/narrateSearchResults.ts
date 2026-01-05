@@ -130,6 +130,9 @@ const sanitizeOutput = (message: string | null | undefined, fallback: string) =>
 const isAbortError = (error: unknown) =>
   error instanceof Error && error.name === "AbortError";
 
+const TIMEOUT_FALLBACK_MESSAGE =
+  "Here are some places I found nearby. Want cheap, mid, or high budget?";
+
 export const narrateSearchResults = async ({
   userMessage,
   locationLabel,
@@ -206,6 +209,7 @@ export const narrateSearchResults = async ({
   } catch (err) {
     if (isAbortError(err)) {
       logger.warn({ err, requestId }, "Search narration LLM call timed out");
+      return TIMEOUT_FALLBACK_MESSAGE;
     } else {
       logger.warn({ err, requestId }, "Search narration LLM call failed");
     }

@@ -25,6 +25,20 @@ const isRecommendationCard = (
   value: RecommendationCardData | null | undefined,
 ): value is RecommendationCardData => value != null;
 
+const isValidCoords = (coords: { lat: number; lng: number } | null | undefined) => {
+  if (!coords) {
+    return false;
+  }
+  const { lat, lng } = coords;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return false;
+  }
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+    return false;
+  }
+  return true;
+};
+
 const createId = () => crypto.randomUUID();
 
 const PLACEHOLDER_OPTIONS: Record<string, string[]> = {
@@ -109,7 +123,8 @@ export default function HomePageClient() {
   }, []);
 
   const sessionId = useMemo(() => createId(), []);
-  const locationReady = Boolean(location || locationText.trim());
+  const hasValidLocation = isValidCoords(location);
+  const locationReady = Boolean(hasValidLocation || locationText.trim());
 
   useEffect(() => {
     if (!location) {
@@ -208,7 +223,7 @@ export default function HomePageClient() {
       return;
     }
 
-    const locationEnabled = Boolean(location);
+    const locationEnabled = hasValidLocation;
     const neighborhood = locationText.trim();
 
     if (locationEnabled && (location?.lat == null || location?.lng == null)) {
@@ -236,19 +251,29 @@ export default function HomePageClient() {
 
     try {
       const radius_m = DEFAULT_RADIUS_M;
+      const hasCoordinates = hasValidLocation;
       const payload = {
         anonId,
         sessionId,
-        location,
-        locationText: location ? undefined : locationText,
+        location: hasCoordinates ? location : null,
+        locationText: hasCoordinates ? undefined : locationText,
         neighborhood: neighborhood || undefined,
         message: userMessage.content,
         action: options?.action,
-        latitude: location?.lat ?? null,
-        longitude: location?.lng ?? null,
+        latitude: hasCoordinates ? location?.lat ?? null : null,
+        longitude: hasCoordinates ? location?.lng ?? null : null,
         radius_m: typeof radius_m === "number" ? radius_m : DEFAULT_RADIUS_M,
         locationEnabled,
+        hasCoordinates,
       };
+
+      if (process.env.NODE_ENV === "development") {
+        console.log("Chat coords", {
+          lat: location?.lat ?? null,
+          lng: location?.lng ?? null,
+          hasCoordinates,
+        });
+      }
 
       if (process.env.NEXT_PUBLIC_DEBUG === "true") {
         console.log("Chat payload", payload);
