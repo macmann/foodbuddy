@@ -237,3 +237,181 @@ test("searchPlacesWithMcp uses relevance ranker and keeps mapsUrl/placeId", asyn
     resetExtractPlacesFromMcpResult();
   }
 });
+
+test("searchPlacesWithMcp keeps far results when explicit location disables distance filter", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalMcpUrl = process.env.COMPOSIO_MCP_URL;
+  const originalApiKey = process.env.COMPOSIO_API_KEY;
+
+  try {
+    process.env.COMPOSIO_MCP_URL = "https://example.com";
+    process.env.COMPOSIO_API_KEY = "test-api-key";
+
+    let capturedQuery: string | null = null;
+    globalThis.fetch = (async (_input, init) => {
+      const body = init?.body ? JSON.parse(init.body.toString()) : null;
+      if (body?.method === "tools/list") {
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: {
+              tools: [
+                {
+                  name: "google_maps_places_text_search",
+                  inputSchema: {
+                    properties: {
+                      query: { type: "string" },
+                      locationBias: { type: "object" },
+                    },
+                  },
+                },
+              ],
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      if (body?.method === "tools/call") {
+        capturedQuery = body.params?.arguments?.query ?? null;
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: { results: [] },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      return new Response("Unexpected request", { status: 500 });
+    }) as typeof fetch;
+
+    setExtractPlacesFromMcpResult(() => ({
+      places: [
+        {
+          id: "place-1",
+          name: "Far Place",
+          location: { latitude: 40.7128, longitude: -74.006 },
+        },
+      ],
+      successfull: true,
+    }));
+
+    const result = await searchPlacesWithMcp({
+      keyword: "local food",
+      coords: { lat: 16.8409, lng: 96.1735 },
+      radiusMeters: 1000,
+      requestId: "test-request",
+      locationText: "Kalaw",
+      disableDistanceFilter: true,
+    });
+
+    assert.equal(result.places.length, 1);
+    assert.match(capturedQuery ?? "", /in Kalaw/i);
+  } finally {
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+    process.env.COMPOSIO_MCP_URL = originalMcpUrl;
+    process.env.COMPOSIO_API_KEY = originalApiKey;
+    resetExtractPlacesFromMcpResult();
+  }
+});
+
+test("searchPlacesWithMcp applies distance filter for near-me queries", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalMcpUrl = process.env.COMPOSIO_MCP_URL;
+  const originalApiKey = process.env.COMPOSIO_API_KEY;
+
+  try {
+    process.env.COMPOSIO_MCP_URL = "https://example.com";
+    process.env.COMPOSIO_API_KEY = "test-api-key";
+
+    let capturedLat: number | null = null;
+    let capturedLng: number | null = null;
+    globalThis.fetch = (async (_input, init) => {
+      const body = init?.body ? JSON.parse(init.body.toString()) : null;
+      if (body?.method === "tools/list") {
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: {
+              tools: [
+                {
+                  name: "google_maps_places_text_search",
+                  inputSchema: {
+                    properties: {
+                      query: { type: "string" },
+                      latitude: { type: "number" },
+                      longitude: { type: "number" },
+                    },
+                  },
+                },
+              ],
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      if (body?.method === "tools/call") {
+        capturedLat = body.params?.arguments?.latitude ?? null;
+        capturedLng = body.params?.arguments?.longitude ?? null;
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: { results: [] },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      return new Response("Unexpected request", { status: 500 });
+    }) as typeof fetch;
+
+    setExtractPlacesFromMcpResult(() => ({
+      places: [
+        {
+          id: "place-1",
+          name: "Far Place",
+          location: { latitude: 40.7128, longitude: -74.006 },
+        },
+      ],
+      successfull: true,
+    }));
+
+    const result = await searchPlacesWithMcp({
+      keyword: "noodle near me",
+      coords: { lat: 16.8409, lng: 96.1735 },
+      radiusMeters: 1000,
+      requestId: "test-request",
+    });
+
+    assert.equal(result.places.length, 0);
+    assert.equal(capturedLat, 16.8409);
+    assert.equal(capturedLng, 96.1735);
+  } finally {
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+    process.env.COMPOSIO_MCP_URL = originalMcpUrl;
+    process.env.COMPOSIO_API_KEY = originalApiKey;
+    resetExtractPlacesFromMcpResult();
+  }
+});

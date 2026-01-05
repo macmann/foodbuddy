@@ -107,6 +107,31 @@ const STOPWORDS = new Set([
   "recommend",
 ]);
 
+const LOCATION_FALLBACK_REGEX = /\b(?:in|near|around)\s+([^\n,.;!?]+)/i;
+
+const LOCATION_FALLBACK_STOPWORDS = new Set([
+  "me",
+  "my",
+  "my location",
+  "current location",
+  "here",
+  "near me",
+  "nearby",
+  "around here",
+  "this area",
+  "my area",
+  "area",
+]);
+
+const LOCATION_TRAILING_PHRASES = [
+  "please",
+  "pls",
+  "plz",
+  "thanks",
+  "thank you",
+  "now",
+];
+
 const matchesAnyPhrase = (normalized: string, phrases: string[]) =>
   phrases.some((phrase) => normalized === phrase);
 
@@ -183,4 +208,39 @@ export const extractSearchKeywordFallback = (text: string): string | null => {
     return null;
   }
   return keyword || null;
+};
+
+const stripTrailingPhrases = (value: string) => {
+  let result = value;
+  for (const phrase of LOCATION_TRAILING_PHRASES) {
+    const pattern = new RegExp(`\\b${phrase}\\b.*$`, "i");
+    result = result.replace(pattern, "").trim();
+  }
+  return result;
+};
+
+export const extractLocationTextFallback = (text: string): string | null => {
+  const match = text.match(LOCATION_FALLBACK_REGEX);
+  if (!match) {
+    return null;
+  }
+  const rawCandidate = match[1]?.trim();
+  if (!rawCandidate) {
+    return null;
+  }
+  const cleaned = stripTrailingPhrases(rawCandidate).trim();
+  if (!cleaned) {
+    return null;
+  }
+  const normalized = normalize(stripPunctuation(cleaned));
+  if (!normalized) {
+    return null;
+  }
+  if (LOCATION_FALLBACK_STOPWORDS.has(normalized)) {
+    return null;
+  }
+  if (normalized.length < 2) {
+    return null;
+  }
+  return cleaned;
 };

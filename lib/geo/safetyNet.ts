@@ -11,11 +11,15 @@ type FilterResult<T> = {
 const isValidCoordinate = (value: number) => Number.isFinite(value);
 
 export const filterByMaxDistance = <T>(
-  origin: GeoPoint,
+  origin: GeoPoint | null | undefined,
   items: T[],
   getPoint: (item: T) => GeoPoint | null | undefined,
   maxDistanceMeters: number,
+  options?: { disableDistanceFilter?: boolean },
 ): FilterResult<T> => {
+  if (!origin || options?.disableDistanceFilter) {
+    return { kept: items, droppedCount: 0 };
+  }
   const kept: T[] = [];
   let droppedCount = 0;
   let maxKeptDistance: number | undefined;

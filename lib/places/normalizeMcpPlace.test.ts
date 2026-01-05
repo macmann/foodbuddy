@@ -28,12 +28,20 @@ test("normalizeMcpPlace returns data for a Google Places result shape", () => {
   assert.deepEqual(normalized.types, ["cafe", "restaurant"]);
 });
 
-test("normalizeMcpPlace returns null when name or coordinates are missing", () => {
+test("normalizeMcpPlace returns null when name is missing", () => {
   const origin = { lat: 37.7749, lng: -122.4194 };
 
   assert.equal(normalizeMcpPlace({ place_id: "missing-name" }, origin), null);
-  assert.equal(
-    normalizeMcpPlace({ name: "Missing coords", place_id: "missing-coords" }, origin),
-    null,
+});
+
+test("normalizeMcpPlace keeps places without coordinates", () => {
+  const origin = { lat: 37.7749, lng: -122.4194 };
+  const normalized = normalizeMcpPlace(
+    { name: "Missing coords", place_id: "missing-coords" },
+    origin,
   );
+
+  assert.ok(normalized);
+  assert.equal(normalized?.placeId, "missing-coords");
+  assert.equal(normalized?.distanceMeters, undefined);
 });

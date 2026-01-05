@@ -142,7 +142,7 @@ export const buildFoodTextSearchQuery = ({
 }): string => {
   const intent = buildRestaurantIntent(keyword);
   if (locationText && locationText.trim().length > 0) {
-    return `${intent} near ${locationText.trim()}`;
+    return `${intent} in ${locationText.trim()}`;
   }
   if (coords) {
     return `${intent} near (${coords.lat},${coords.lng})`;
