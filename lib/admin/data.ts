@@ -173,7 +173,7 @@ export const listQueries = async ({
   pageSize,
 }: QueryFilters) => {
   const createdAt = buildDateRange({ from, to });
-  const where: Prisma.PlaceWhereInput = {
+  const where: Prisma.RecommendationEventWhereInput = {
     ...(channel ? { channel } : {}),
     ...(status ? { status } : {}),
     ...(source ? { source } : {}),
