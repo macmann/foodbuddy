@@ -27,6 +27,7 @@ export type ChatResponseMeta = {
   sessionId?: string;
   nextPageToken?: string;
   needs_location?: boolean;
+  language?: string;
 };
 
 export type ChatResponse = {
@@ -74,6 +75,7 @@ export const ChatResponseSchema = z.object({
       sessionId: z.string().optional(),
       nextPageToken: z.string().optional(),
       needs_location: z.boolean().optional(),
+      language: z.string().optional(),
     })
     .passthrough(),
 });

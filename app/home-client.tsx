@@ -25,14 +25,15 @@ const isRecommendationCard = (
 
 const createId = () => crypto.randomUUID();
 
-const PLACEHOLDER_OPTIONS = [
-  "Any good food around here?",
-  "Cheap noodles within 1km",
-  "Best café for working",
-];
+const PLACEHOLDER_OPTIONS: Record<string, string[]> = {
+  en: ["Any good food around here?", "Cheap noodles within 1km", "Best café for working"],
+  my: ["နီးစပ်ရာစားသောက်ဆိုင်ရှိလား?", "၁km အတွင်း စျေးသက်သာတဲ့ ခေါက်ဆွဲ", "အလုပ်လုပ်ဖို့ ကော်ဖီဆိုင်ကောင်းကောင်း"],
+};
 
-const getRandomPlaceholder = () =>
-  PLACEHOLDER_OPTIONS[Math.floor(Math.random() * PLACEHOLDER_OPTIONS.length)];
+const getRandomPlaceholder = (lang: string) => {
+  const options = PLACEHOLDER_OPTIONS[lang] ?? PLACEHOLDER_OPTIONS.en;
+  return options[Math.floor(Math.random() * options.length)];
+};
 const DEFAULT_RADIUS_M = 1500;
 const PLACE_INCREMENT = 3;
 const PREF_CHIPS = [
@@ -77,7 +78,10 @@ export default function HomePageClient() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [lastActivityAt, setLastActivityAt] = useState<number | null>(null);
-  const [composerPlaceholder] = useState(getRandomPlaceholder);
+  const [detectedLanguage, setDetectedLanguage] = useState("en");
+  const [composerPlaceholder, setComposerPlaceholder] = useState(() =>
+    getRandomPlaceholder("en"),
+  );
   const [showPreferences, setShowPreferences] = useState(false);
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
@@ -115,6 +119,10 @@ export default function HomePageClient() {
     }, 4000);
     return () => window.clearTimeout(timeout);
   }, [toastMessage]);
+
+  useEffect(() => {
+    setComposerPlaceholder(getRandomPlaceholder(detectedLanguage));
+  }, [detectedLanguage]);
 
   useEffect(() => {
     if (feedbackPromptVisible || feedbackSubmitted || feedbackOptions.length === 0) {
@@ -258,6 +266,10 @@ export default function HomePageClient() {
           message: data.message,
           places: data.places?.length ?? 0,
         });
+      }
+      const normalizedLanguage = data.meta?.language?.split("-")[0]?.toLowerCase();
+      if (normalizedLanguage && normalizedLanguage !== detectedLanguage) {
+        setDetectedLanguage(normalizedLanguage);
       }
       const places = (data.places ?? []).filter(isRecommendationCard) as RecommendationCardData[];
       const recommendations = places.slice(0, 3);
