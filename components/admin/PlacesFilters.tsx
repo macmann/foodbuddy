@@ -4,9 +4,11 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useState } from "react";
 
 type PlacesFiltersProps = {
-  q: string;
+  query: string;
   minCommunityRating: string;
   hasFeedback: string;
+  isCurated: string;
+  isFeatured: string;
 };
 
 const feedbackOptions = [
@@ -15,15 +17,29 @@ const feedbackOptions = [
   { value: "no", label: "No feedback" },
 ];
 
+const curatedOptions = [
+  { value: "all", label: "All" },
+  { value: "curated", label: "Curated" },
+  { value: "google", label: "Google" },
+];
+
+const featuredOptions = [
+  { value: "all", label: "All" },
+  { value: "yes", label: "Featured" },
+  { value: "no", label: "Not featured" },
+];
+
 export default function PlacesFilters({
-  q,
+  query,
   minCommunityRating,
   hasFeedback,
+  isCurated,
+  isFeatured,
 }: PlacesFiltersProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const [search, setSearch] = useState(q);
+  const [search, setSearch] = useState(query);
 
   const updateParams = useCallback(
     (updates: Record<string, string | null>) => {
@@ -45,7 +61,7 @@ export default function PlacesFilters({
 
   const handleSearchSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    updateParams({ q: search.trim() || null });
+    updateParams({ query: search.trim() || null });
   };
 
   return (
@@ -66,6 +82,40 @@ export default function PlacesFilters({
             Search
           </button>
         </form>
+
+        <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2">
+          <span className="text-xs uppercase tracking-[0.2em] text-slate-500">Curated</span>
+          <select
+            className="bg-transparent text-sm text-slate-200 outline-none"
+            value={isCurated}
+            onChange={(event) =>
+              updateParams({ isCurated: event.target.value === "all" ? null : event.target.value })
+            }
+          >
+            {curatedOptions.map((option) => (
+              <option key={option.value} value={option.value} className="text-slate-900">
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2">
+          <span className="text-xs uppercase tracking-[0.2em] text-slate-500">Featured</span>
+          <select
+            className="bg-transparent text-sm text-slate-200 outline-none"
+            value={isFeatured}
+            onChange={(event) =>
+              updateParams({ isFeatured: event.target.value === "all" ? null : event.target.value })
+            }
+          >
+            {featuredOptions.map((option) => (
+              <option key={option.value} value={option.value} className="text-slate-900">
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
 
         <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2">
           <span className="text-xs uppercase tracking-[0.2em] text-slate-500">Min rating</span>

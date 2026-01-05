@@ -30,6 +30,8 @@ type QueryFilters = DateRange & {
 
 type PlaceFilters = {
   q?: string;
+  isCurated?: boolean;
+  isFeatured?: boolean;
   minCommunityRating?: number;
   hasFeedback?: boolean;
   page: number;
@@ -242,6 +244,8 @@ export const getQueryDetailWithPlaces = async (eventId: string) => {
 
 export const listPlaces = async ({
   q,
+  isCurated,
+  isFeatured,
   minCommunityRating,
   hasFeedback,
   page,
@@ -259,9 +263,12 @@ export const listPlaces = async ({
             { name: { contains: q, mode: Prisma.QueryMode.insensitive } },
             { address: { contains: q, mode: Prisma.QueryMode.insensitive } },
             { placeId: { contains: q, mode: Prisma.QueryMode.insensitive } },
+            { externalPlaceId: { contains: q, mode: Prisma.QueryMode.insensitive } },
           ],
         }
       : {}),
+    ...(isCurated === undefined ? {} : { source: isCurated ? "CURATED" : "GOOGLE" }),
+    ...(isFeatured === undefined ? {} : { isFeatured }),
     ...(minCommunityRating !== undefined
       ? {
           aggregate: {
@@ -345,11 +352,17 @@ export const getPlaceDetail = async (placeId: string) =>
     where: { placeId },
     include: {
       aggregate: true,
+      _count: { select: { feedback: true } },
       feedback: {
         orderBy: { createdAt: "desc" },
         take: 20,
       },
     },
+  });
+
+export const getPlaceEditData = async (placeId: string) =>
+  prisma.place.findUnique({
+    where: { placeId },
   });
 
 export const listFeedback = async ({

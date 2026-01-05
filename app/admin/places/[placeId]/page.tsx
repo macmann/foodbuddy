@@ -30,6 +30,12 @@ export default async function PlaceDetailPage({
         <div className="flex items-center gap-3">
           <PlaceRefreshButton placeId={place.placeId} />
           <Link
+            href={`/admin/places/${place.placeId}/edit`}
+            className="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:border-emerald-300"
+          >
+            Edit place
+          </Link>
+          <Link
             href="/admin/places"
             className="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:border-emerald-300"
           >
@@ -53,6 +59,14 @@ export default async function PlaceDetailPage({
               </p>
             </div>
             <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Source</p>
+              <p className="mt-2">{place.source === "CURATED" ? "Curated" : "Google"}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Featured</p>
+              <p className="mt-2">{place.isFeatured ? "Yes" : "No"}</p>
+            </div>
+            <div>
               <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Google rating</p>
               <p className="mt-2">
                 {place.googleRating
@@ -63,6 +77,39 @@ export default async function PlaceDetailPage({
             <div>
               <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Last fetched</p>
               <p className="mt-2">{formatDate(place.lastFetchedAt)}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                External place ID
+              </p>
+              <p className="mt-2">{place.externalPlaceId ?? "N/A"}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Price level</p>
+              <p className="mt-2">
+                {place.priceLevel !== null && place.priceLevel !== undefined
+                  ? place.priceLevel
+                  : "N/A"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                Cuisine tags
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {place.cuisineTags.length > 0 ? (
+                  place.cuisineTags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded-full bg-slate-800 px-2 py-1 text-xs text-slate-200"
+                    >
+                      {tag}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-slate-500">N/A</span>
+                )}
+              </div>
             </div>
             <div>
               <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Maps</p>
@@ -82,10 +129,30 @@ export default async function PlaceDetailPage({
           </div>
         </div>
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-          <h3 className="text-sm font-semibold text-slate-200">Community aggregates</h3>
+          <h3 className="text-sm font-semibold text-slate-200">FoodBuddy aggregates</h3>
           <div className="mt-4 space-y-4 text-sm text-slate-300">
             <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Rating avg</p>
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                FoodBuddy rating avg
+              </p>
+              <p className="mt-2">
+                {place.aggregate
+                  ? `${place.aggregate.foodbuddyRatingAvg.toFixed(1)}`
+                  : "N/A"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                FoodBuddy rating count
+              </p>
+              <p className="mt-2">
+                {place.aggregate ? place.aggregate.foodbuddyRatingCount : "N/A"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                Community rating avg
+              </p>
               <p className="mt-2">
                 {place.aggregate
                   ? `${place.aggregate.communityRatingAvg.toFixed(1)}`
@@ -93,9 +160,25 @@ export default async function PlaceDetailPage({
               </p>
             </div>
             <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Rating count</p>
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                Community rating count
+              </p>
               <p className="mt-2">
                 {place.aggregate ? place.aggregate.communityRatingCount : "N/A"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                Feedback count
+              </p>
+              <p className="mt-2">{place._count?.feedback ?? 0}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                Latest feedback
+              </p>
+              <p className="mt-2">
+                {feedback.length > 0 ? formatDate(feedback[0]?.createdAt) : "N/A"}
               </p>
             </div>
             <div>
