@@ -111,7 +111,7 @@ const matchesAnyPhrase = (normalized: string, phrases: string[]) =>
   phrases.some((phrase) => normalized === phrase);
 
 const removePhrases = (value: string, phrases: string[]) =>
-  phrases.reduce((acc, phrase) => acc.replaceAll(phrase, " "), value);
+  phrases.reduce((acc, phrase) => acc.split(phrase).join(" "), value);
 
 const filterTokens = (value: string) =>
   value
