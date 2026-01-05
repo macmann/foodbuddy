@@ -5,6 +5,10 @@ export type RecommendationCardData = {
   name: string;
   rating?: number;
   reviewCount?: number;
+  foodbuddyRatingAvg?: number;
+  foodbuddyRatingCount?: number;
+  foodbuddySummary?: string | null;
+  sourceLabel?: "foodbuddy_curated" | "google_enriched" | "google";
   priceLevel?: number;
   lat?: number;
   lng?: number;
@@ -51,6 +55,10 @@ export const RecommendationCardSchema = z.object({
   name: z.string(),
   rating: z.number().optional(),
   reviewCount: z.number().optional(),
+  foodbuddyRatingAvg: z.number().optional(),
+  foodbuddyRatingCount: z.number().optional(),
+  foodbuddySummary: z.string().nullable().optional(),
+  sourceLabel: z.enum(["foodbuddy_curated", "google_enriched", "google"]).optional(),
   priceLevel: z.number().optional(),
   lat: z.number().optional(),
   lng: z.number().optional(),
