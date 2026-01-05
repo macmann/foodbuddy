@@ -1,3 +1,5 @@
+import type { UserPrefs } from "./types";
+
 export type SessionPlace = {
   placeId: string;
   name: string;
@@ -21,12 +23,7 @@ export type SessionMemory = {
   lastPlaces: SessionPlace[];
   lastQuery: string;
   lastResolvedLocation: SessionLocation;
-  userPrefs: {
-    cuisine?: string[];
-    budget?: "cheap" | "mid" | "high";
-    vibe?: string[];
-    dietary?: string[];
-  };
+  userPrefs: UserPrefs;
   lastIntent: "search" | "refine" | "place_followup" | "smalltalk";
 };
 
