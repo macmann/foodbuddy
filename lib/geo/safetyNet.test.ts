@@ -40,6 +40,14 @@ test("filterByMaxDistance drops items with missing coordinates", () => {
   assert.equal(result.droppedCount, 1);
 });
 
+test("filterByMaxDistance keeps all items when origin is null", () => {
+  const items = [{ id: "missing" }, { id: "near" }];
+  const result = filterByMaxDistance(null, items, () => null, 5_000);
+
+  assert.equal(result.kept.length, items.length);
+  assert.equal(result.droppedCount, 0);
+});
+
 test("filterByMaxDistance returns max kept distance", () => {
   const origin = { lat: 16.8409, lng: 96.1735 };
   const items = [

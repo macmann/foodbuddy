@@ -63,7 +63,7 @@ const normalizeTypes = (value: unknown): string[] | undefined => {
 
 export function normalizeMcpPlace(
   place: any,
-  origin: { lat: number; lng: number },
+  origin?: { lat: number; lng: number } | null,
 ): RecommendationCardData | null {
   if (!isRecord(place)) {
     return null;
@@ -81,17 +81,13 @@ export function normalizeMcpPlace(
     return null;
   }
 
-  const { lat, lng } = extractLatLng(place);
-  if (lat === undefined || lng === undefined) {
-    return null;
-  }
-
   const address =
     coerceString(place.formattedAddress) ??
     coerceString(place.shortFormattedAddress) ??
     coerceString(place.formatted_address) ??
     coerceString(place.vicinity) ??
     coerceString(place.address);
+  const { lat, lng } = extractLatLng(place);
   const rating = coerceNumber(place.rating ?? place.googleRating);
   const reviewCount = coerceNumber(
     place.userRatingCount ?? place.user_ratings_total ?? place.reviewsCount ?? place.googleRatingsTotal,
@@ -101,12 +97,14 @@ export function normalizeMcpPlace(
   const types = normalizeTypes(place.types ?? place.categories);
   const placeId =
     coerceString(place.placeId ?? place.place_id ?? place.id) ??
-    buildFallbackPlaceId(`${name}|${lat}|${lng}|${address ?? ""}`);
+    buildFallbackPlaceId(
+      `${name}|${lat ?? "unknown"}|${lng ?? "unknown"}|${address ?? ""}`,
+    );
 
-  const distanceMeters = haversineMeters(origin, { lat, lng });
-  if (!Number.isFinite(distanceMeters)) {
-    return null;
-  }
+  const distanceMeters =
+    origin && lat !== undefined && lng !== undefined
+      ? haversineMeters(origin, { lat, lng })
+      : undefined;
 
   return {
     placeId,
@@ -114,9 +112,12 @@ export function normalizeMcpPlace(
     rating: rating ?? undefined,
     reviewCount: reviewCount ?? undefined,
     priceLevel: priceLevel ?? undefined,
-    lat,
-    lng,
-    distanceMeters,
+    lat: lat ?? undefined,
+    lng: lng ?? undefined,
+    distanceMeters:
+      distanceMeters !== undefined && Number.isFinite(distanceMeters)
+        ? distanceMeters
+        : undefined,
     address,
     mapsUrl,
     types,

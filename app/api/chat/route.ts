@@ -15,6 +15,7 @@ import { isAllowedModel } from "../../../lib/agent/model";
 import { isSmallTalkMessage } from "../../../lib/chat/intent";
 import {
   extractSearchKeywordFallback,
+  extractLocationTextFallback,
   isGreeting,
   isTooVagueForSearch,
 } from "../../../lib/chat/intentHeuristics";
@@ -189,11 +190,14 @@ const LOCATION_DENYLIST = new Set([
   "place",
   "places",
   "here",
+  "me",
   "nearby",
   "around",
   "my area",
   "area",
   "this area",
+  "my location",
+  "current location",
 ]);
 
 const normalizeLocationToken = (value: string) =>
@@ -228,6 +232,16 @@ const toSessionPlaces = (places: RecommendationCardData[]) =>
     mapsUrl: place.mapsUrl,
     types: place.types,
   }));
+
+const mergeEnrichedPlaces = (
+  places: RecommendationCardData[],
+  enrichedPlaces: RecommendationCardData[],
+) => {
+  const enrichedById = new Map(
+    enrichedPlaces.map((place) => [place.placeId, place]),
+  );
+  return places.map((place) => enrichedById.get(place.placeId) ?? place);
+};
 
 
 const applyLocalRefine = ({
@@ -1358,8 +1372,13 @@ export async function POST(request: Request) {
   const heuristicGreeting = isGreeting(body.message, responseLanguage);
   const heuristicTooVague = isTooVagueForSearch(body.message);
   const fallbackKeyword = extractSearchKeywordFallback(body.message);
+  const lowConfidence = llmExtract.confidence < LOW_CONFIDENCE_THRESHOLD;
+  const fallbackLocationText =
+    !llmExtract.location_text && lowConfidence
+      ? extractLocationTextFallback(body.message)
+      : null;
   const shouldUseHeuristic =
-    heuristicGreeting || heuristicTooVague || llmExtract.confidence < LOW_CONFIDENCE_THRESHOLD;
+    heuristicGreeting || heuristicTooVague || lowConfidence;
   const intentSource = shouldUseHeuristic ? "heuristic" : "llm";
 
   logger.info(
@@ -1669,8 +1688,9 @@ export async function POST(request: Request) {
           lng: sessionMemory.lastResolvedLocation.lng,
         },
       });
+      const mergedPlaces = mergeEnrichedPlaces(searchResult.places, enrichedPlaces);
       const refinedPlaces = addWhyTryLines({
-        places: enrichedPlaces,
+        places: mergedPlaces,
         query: refinedKeyword,
         prefs: sessionMemory.userPrefs,
       });
@@ -1882,12 +1902,14 @@ export async function POST(request: Request) {
     llmExtract.radius_m > 0
       ? Math.round(llmExtract.radius_m)
       : radiusMeters;
-  const explicitLocationTextCandidate = llmExtract.location_text?.trim();
+  const explicitLocationTextCandidate =
+    llmExtract.location_text?.trim() ?? fallbackLocationText?.trim();
   const explicitLocationText =
     explicitLocationTextCandidate && !isGenericLocation(explicitLocationTextCandidate)
       ? explicitLocationTextCandidate
       : undefined;
   const explicitLocationPresent = Boolean(explicitLocationText);
+  const allowCoordsFallback = allowRequestCoordsFallback && !explicitLocationPresent;
 
   if (!explicitLocationPresent && !coords) {
     await setPending(sessionId, {
@@ -1952,7 +1974,7 @@ export async function POST(request: Request) {
   });
 
   if (resolvedSearchCoords.geocodeFailed) {
-    if (coords && allowRequestCoordsFallback) {
+    if (coords && allowCoordsFallback) {
       logger.warn(
         { requestId, keyword },
         "Geocode failed; falling back to request coords",
@@ -2068,6 +2090,7 @@ export async function POST(request: Request) {
     requestId,
     locationText: searchLocationText,
     forceNearbySearch: coordsSource === "geocoded_text",
+    disableDistanceFilter: explicitLocationPresent,
   });
 
   await upsertSearchSession({
@@ -2088,8 +2111,9 @@ export async function POST(request: Request) {
     places: withCoords,
     origin: searchCoords,
   });
+  const mergedPlaces = mergeEnrichedPlaces(searchResult.places, enrichedPlaces);
   const annotatedPlaces = addWhyTryLines({
-    places: enrichedPlaces,
+    places: mergedPlaces,
     query: keyword,
     prefs: sessionPrefs,
   });
