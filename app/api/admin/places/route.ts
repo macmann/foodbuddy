@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { prisma } from "../../../../lib/db";
 
@@ -65,15 +66,16 @@ export const GET = async (request: Request) => {
   const isFeatured = parseBooleanParam(searchParams.get("isFeatured"));
   const page = Number.parseInt(searchParams.get("page") ?? "1", 10) || 1;
   const pageSize = Number.parseInt(searchParams.get("pageSize") ?? "50", 10) || 50;
+  const insensitive = Prisma.QueryMode.insensitive;
 
-  const where = {
+  const where: Prisma.PlaceWhereInput = {
     ...(query
       ? {
           OR: [
-            { name: { contains: query, mode: "insensitive" } },
-            { address: { contains: query, mode: "insensitive" } },
-            { placeId: { contains: query, mode: "insensitive" } },
-            { externalPlaceId: { contains: query, mode: "insensitive" } },
+            { name: { contains: query, mode: insensitive } },
+            { address: { contains: query, mode: insensitive } },
+            { placeId: { contains: query, mode: insensitive } },
+            { externalPlaceId: { contains: query, mode: insensitive } },
           ],
         }
       : {}),
