@@ -7,7 +7,7 @@ export const locationParseSchema = z
     location_text: z.string().min(1).optional().nullable(),
     use_device_location: z.boolean(),
     radius_m: z.number().positive().optional().default(1500),
-    place_types: z.array(z.string()).min(1),
+    place_types: z.array(z.string()).min(1).optional().nullable(),
     confidence: z.number().min(0).max(1),
     warnings: z.array(z.string()).optional(),
   })
