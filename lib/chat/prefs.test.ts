@@ -13,6 +13,12 @@ test("normalizeBudget maps messy inputs to canonical values", () => {
 test("mergePrefs normalizes budget and rejects unknown values", () => {
   const existing = { cuisine: ["thai"], budget: "mid" as const };
 
+  const expensive = mergePrefs(existing, { budget: "expensive" });
+  assert.equal(expensive.budget, "high");
+
+  const mid = mergePrefs({ ...existing, budget: "cheap" }, { budget: "mid" });
+  assert.equal(mid.budget, "mid");
+
   const normalized = mergePrefs(existing, { budget: "pricey" });
   assert.equal(normalized.budget, "high");
 

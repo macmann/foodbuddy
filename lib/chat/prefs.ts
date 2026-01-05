@@ -1,6 +1,4 @@
-import type { Budget, UserPrefs } from "./types";
-
-export type UserPrefsUpdate = Omit<UserPrefs, "budget"> & { budget?: string | null };
+import type { Budget, UserPrefs, UserPrefsUpdate } from "./types";
 
 const budgetMap: Record<string, Budget> = {
   cheap: "cheap",
@@ -20,7 +18,9 @@ const budgetMap: Record<string, Budget> = {
   luxury: "high",
 };
 
-export const normalizeBudget = (input?: string | null): Budget | undefined => {
+export const normalizeBudget = (
+  input?: string | Budget | null,
+): Budget | undefined => {
   if (!input) {
     return undefined;
   }
@@ -37,16 +37,16 @@ const mergeStringArrays = (current?: string[], next?: string[]) => {
 };
 
 export const mergePrefs = (
-  existing: UserPrefs | undefined,
+  current: UserPrefs | undefined,
   update: UserPrefsUpdate,
 ): UserPrefs => {
-  const normalizedExisting = normalizeBudget(existing?.budget ?? null);
-  const normalizedUpdate = normalizeBudget(update.budget ?? null);
+  const nextBudget =
+    normalizeBudget(update.budget ?? undefined) ?? current?.budget;
 
   return {
-    cuisine: mergeStringArrays(existing?.cuisine, update.cuisine),
-    vibe: mergeStringArrays(existing?.vibe, update.vibe),
-    dietary: mergeStringArrays(existing?.dietary, update.dietary),
-    budget: normalizedUpdate ?? normalizedExisting,
+    cuisine: mergeStringArrays(current?.cuisine, update.cuisine),
+    vibe: mergeStringArrays(current?.vibe, update.vibe),
+    dietary: mergeStringArrays(current?.dietary, update.dietary),
+    budget: nextBudget,
   };
 };
