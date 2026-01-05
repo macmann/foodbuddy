@@ -51,6 +51,10 @@ import type { SessionPlace } from "../../../lib/chat/sessionMemory";
 import { getSessionMemory, updateSessionMemory } from "../../../lib/chat/sessionMemory";
 import { classifyIntent } from "../../../lib/chat/classifyIntent";
 import { resolvePlaceReference } from "../../../lib/chat/resolvePlaceReference";
+import {
+  answerFromLastPlaces,
+  isListQuestion,
+} from "../../../lib/chat/listQna";
 import { mergePrefs } from "../../../lib/chat/prefs";
 import type { UserPrefs, UserPrefsUpdate } from "../../../lib/chat/types";
 import { listMcpTools, mcpCall } from "../../../lib/mcp/client";
@@ -169,85 +173,6 @@ const toSessionPlaces = (places: RecommendationCardData[]) =>
     types: place.types,
   }));
 
-const sortByRating = (a: SessionPlace, b: SessionPlace) => {
-  const ratingA = a.rating ?? -1;
-  const ratingB = b.rating ?? -1;
-  if (ratingA === ratingB) {
-    return (b.reviews ?? 0) - (a.reviews ?? 0);
-  }
-  return ratingB - ratingA;
-};
-
-const sortByDistance = (a: SessionPlace, b: SessionPlace) => {
-  const distanceA = a.distanceMeters ?? Number.POSITIVE_INFINITY;
-  const distanceB = b.distanceMeters ?? Number.POSITIVE_INFINITY;
-  return distanceA - distanceB;
-};
-
-const sortByReviews = (a: SessionPlace, b: SessionPlace) =>
-  (b.reviews ?? -1) - (a.reviews ?? -1);
-
-const parseListQnaFollowupType = (value?: string | null) => {
-  if (
-    value === "highest_rating" ||
-    value === "closest" ||
-    value === "most_reviews" ||
-    value === "recommend_one" ||
-    value === "top_n" ||
-    value === "compare"
-  ) {
-    return value;
-  }
-  return null;
-};
-
-const selectPlacesForListQna = (
-  places: SessionPlace[],
-  followupType: NonNullable<ReturnType<typeof parseListQnaFollowupType>>,
-  topN?: number | null,
-) => {
-  const sorted = [...places];
-  switch (followupType) {
-    case "closest":
-      sorted.sort(sortByDistance);
-      break;
-    case "most_reviews":
-      sorted.sort(sortByReviews);
-      break;
-    case "highest_rating":
-    case "recommend_one":
-    case "top_n":
-    default:
-      sorted.sort(sortByRating);
-      break;
-  }
-  const count = followupType === "top_n" ? Math.max(topN ?? 3, 1) : 1;
-  return sorted.slice(0, count);
-};
-
-const buildListQnaMessage = (
-  followupType: NonNullable<ReturnType<typeof parseListQnaFollowupType>>,
-  place?: SessionPlace,
-  count?: number,
-) => {
-  if (!place) {
-    return "I couldn't find that in the last results. Want me to search again?";
-  }
-  switch (followupType) {
-    case "closest":
-      return `The closest option from your last results is ${place.name}.`;
-    case "most_reviews":
-      return `The most-reviewed option from your last results is ${place.name}.`;
-    case "highest_rating":
-    case "recommend_one":
-      return `The highest-rated option from your last results is ${place.name}.`;
-    case "top_n":
-      return `Here are the top ${count ?? 3} options from your last results.`;
-    case "compare":
-    default:
-      return `Here are a few options from your last results.`;
-  }
-};
 
 const applyLocalRefine = ({
   message,
@@ -1045,6 +970,10 @@ const buildChatResponse = ({
   followups,
   isFollowUp,
   language,
+  highlights,
+  referencedPlaceIds,
+  source,
+  suppressIntro,
 }: {
   status: ChatResponse["status"];
   message: string;
@@ -1060,11 +989,15 @@ const buildChatResponse = ({
   followups?: ChatResponse["meta"]["followups"];
   isFollowUp?: boolean;
   language?: string;
+  highlights?: ChatResponse["meta"]["highlights"];
+  referencedPlaceIds?: ChatResponse["meta"]["referencedPlaceIds"];
+  source?: ChatResponse["meta"]["source"];
+  suppressIntro?: boolean;
 }): ChatResponse => ({
   status,
   message: (() => {
     const sanitizedMessage = safeUserMessage(message, "");
-    if (places.length > 0) {
+    if (places.length > 0 && !suppressIntro) {
       const intro = buildPlacesIntroMessage({
         userMessage,
         locationLabel,
@@ -1095,6 +1028,9 @@ const buildChatResponse = ({
     nextPageToken,
     needs_location: needsLocation || undefined,
     language,
+    highlights,
+    referencedPlaceIds,
+    source,
   },
 });
 
@@ -1418,42 +1354,51 @@ export async function POST(request: Request) {
     }
   }
 
-  if (llmExtract.intent === "list_qna" && sessionMemory?.lastPlaces?.length) {
-    const followupType = parseListQnaFollowupType(llmExtract.followup_type);
-    if (followupType) {
-      const selected = selectPlacesForListQna(
-        sessionMemory.lastPlaces,
-        followupType,
-        llmExtract.top_n,
-      );
-      const responsePlaces = addWhyTryLines({
-        places: selected.map(mapSessionPlaceToRecommendation),
-        query: sessionMemory.lastQuery,
-        prefs: sessionMemory.userPrefs,
-      });
-      const message = buildListQnaMessage(
-        followupType,
-        selected[0],
-        selected.length,
-      );
-      if (sessionId) {
-        updateSessionMemory(sessionId, { lastIntent: "place_followup" });
-      }
-      return respondChat(
-        200,
-        buildChatResponse({
-          status: "ok",
-          message,
-          places: responsePlaces,
-          sessionId,
-          userMessage: body.message,
-          locationLabel: locationText,
-          radiusMeters,
-          mode: "place_followup",
-          language: responseLanguage,
-        }),
-      );
+  const shouldHandleListQna = isListQuestion(body.message);
+  if (shouldHandleListQna) {
+    const listQnaResult = answerFromLastPlaces({
+      message: body.message,
+      lastPlaces: sessionMemory?.lastPlaces ?? [],
+      userPrefs: sessionMemory?.userPrefs,
+    });
+    logger.info(
+      {
+        ...logContext,
+        lastPlacesCount: sessionMemory?.lastPlaces?.length ?? 0,
+        detectedIntent: listQnaResult.detectedIntent,
+        no_mcp_call: true,
+        mode: "list_qna",
+      },
+      "List Q&A answered from session places",
+    );
+    const responsePlaces = addWhyTryLines({
+      places: (listQnaResult.rankedPlaces ?? sessionMemory?.lastPlaces ?? []).map(
+        mapSessionPlaceToRecommendation,
+      ),
+      query: sessionMemory?.lastQuery ?? body.message,
+      prefs: sessionMemory?.userPrefs,
+    });
+    if (sessionId) {
+      updateSessionMemory(sessionId, { lastIntent: "list_qna" });
     }
+    return respondChat(
+      200,
+      buildChatResponse({
+        status: "ok",
+        message: listQnaResult.summary,
+        places: responsePlaces,
+        sessionId,
+        userMessage: body.message,
+        locationLabel: locationText,
+        radiusMeters,
+        mode: "list_qna",
+        language: responseLanguage,
+        highlights: listQnaResult.highlights,
+        referencedPlaceIds: listQnaResult.referencedPlaceIds,
+        source: "session_last_places",
+        suppressIntro: true,
+      }),
+    );
   }
 
   if (llmExtract.intent === "refine" && sessionMemory?.lastPlaces?.length) {

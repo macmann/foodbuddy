@@ -21,13 +21,22 @@ export type RecommendationCardData = {
 export type Place = RecommendationCardData;
 
 export type ChatResponseMeta = {
-  mode: "search" | "place_followup" | "refine" | "needs_location" | "smalltalk";
+  mode:
+    | "search"
+    | "place_followup"
+    | "refine"
+    | "needs_location"
+    | "smalltalk"
+    | "list_qna";
   suggestedPrompts?: string[];
   followups?: { label: string; action: "refine" | "place_details" | "search"; payload?: any }[];
   sessionId?: string;
   nextPageToken?: string;
   needs_location?: boolean;
   language?: string;
+  highlights?: { title: string; details: string }[];
+  referencedPlaceIds?: string[];
+  source?: string;
 };
 
 export type ChatResponse = {
@@ -61,7 +70,24 @@ export const ChatResponseSchema = z.object({
   places: z.array(RecommendationCardSchema),
   meta: z
     .object({
-      mode: z.enum(["search", "place_followup", "refine", "needs_location", "smalltalk"]),
+      mode: z.enum([
+        "search",
+        "place_followup",
+        "refine",
+        "needs_location",
+        "smalltalk",
+        "list_qna",
+      ]),
+      highlights: z
+        .array(
+          z.object({
+            title: z.string(),
+            details: z.string(),
+          }),
+        )
+        .optional(),
+      referencedPlaceIds: z.array(z.string()).optional(),
+      source: z.string().optional(),
       suggestedPrompts: z.array(z.string()).optional(),
       followups: z
         .array(
