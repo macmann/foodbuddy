@@ -3,6 +3,7 @@ import { z } from "zod";
 import { hashUserId } from "../../../lib/hash";
 import { commentContainsUrl, recordPlaceFeedback } from "../../../lib/feedback";
 import { logger } from "../../../lib/logger";
+import { ensurePlaceFromNormalizedMcpPlace } from "../../../lib/places/ensurePlace";
 import { createRequestContext } from "../../../lib/request";
 import { rateLimit } from "../../../lib/rateLimit";
 
@@ -13,6 +14,20 @@ const feedbackSchema = z.object({
   rating: z.number().int().min(1).max(5),
   commentText: z.string().optional(),
   tags: z.array(z.string().min(1)).optional(),
+  place: z
+    .object({
+      placeId: z.string().min(1),
+      name: z.string().min(1),
+      lat: z.number().optional(),
+      lng: z.number().optional(),
+      address: z.string().optional(),
+      mapsUrl: z.string().optional(),
+      priceLevel: z.number().optional(),
+      types: z.array(z.string()).optional(),
+      rating: z.number().optional(),
+      reviewCount: z.number().optional(),
+    })
+    .optional(),
 });
 
 export async function POST(request: Request) {
@@ -51,6 +66,10 @@ export async function POST(request: Request) {
         Math.ceil((limiter.resetAt - Date.now()) / 1000).toString(),
       );
       return response;
+    }
+
+    if (parsed.data.place && parsed.data.place.placeId === placeId) {
+      await ensurePlaceFromNormalizedMcpPlace(parsed.data.place);
     }
 
     const feedback = await recordPlaceFeedback({

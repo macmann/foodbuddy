@@ -85,6 +85,8 @@ export const recalculatePlaceAggregate = async (
       data: {
         communityRatingAvg: averageRating,
         communityRatingCount: ratingCount,
+        foodbuddyRatingAvg: averageRating,
+        foodbuddyRatingCount: ratingCount,
         tagCounts,
         lastUpdatedAt: new Date(),
       },
@@ -95,6 +97,8 @@ export const recalculatePlaceAggregate = async (
         placeId,
         communityRatingAvg: averageRating,
         communityRatingCount: ratingCount,
+        foodbuddyRatingAvg: averageRating,
+        foodbuddyRatingCount: ratingCount,
         tagCounts,
         lastUpdatedAt: new Date(),
       },
