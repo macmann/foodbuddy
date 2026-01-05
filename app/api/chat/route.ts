@@ -12,7 +12,7 @@ import { filterByMaxDistance } from "../../../lib/geo/safetyNet";
 import { haversineMeters } from "../../../lib/reco/scoring";
 import { getLLMSettings } from "../../../lib/settings/llm";
 import { isAllowedModel } from "../../../lib/agent/model";
-import { detectIntent, isSmallTalkMessage } from "../../../lib/chat/intent";
+import { isSmallTalkMessage } from "../../../lib/chat/intent";
 import { normalizeMcpPlace } from "../../../lib/places/normalizeMcpPlace";
 import {
   buildNearbySearchArgs,
@@ -41,8 +41,7 @@ import {
 import { rankMcpPlacesByRelevance } from "../../../lib/chat/relevanceRanker";
 import { PENDING_ACTION_RECOMMEND } from "../../../lib/chat/recommendState";
 import { geocodeLocationText } from "../../../lib/intent/geocode";
-import { applyGuardrails } from "../../../lib/intent/locationGuardrails";
-import { parseLocationWithLLM } from "../../../lib/intent/locationParser";
+import { extractWithLLM } from "../../../lib/intent/llmExtractor";
 import {
   normalizeRequestCoords,
   resolveSearchCoords,
@@ -61,6 +60,7 @@ import type { ToolDefinition } from "../../../lib/mcp/types";
 import { buildFallbackNarration } from "../../../lib/narration/fallbackNarration";
 import { narratePlacesWithLLM } from "../../../lib/narration/narratePlaces";
 import { narrateSearchResults } from "../../../lib/narration/narrateSearchResults";
+import { t } from "../../../lib/i18n";
 import type {
   ChatResponse,
   RecommendationCardData,
@@ -71,8 +71,6 @@ export const dynamic = "force-dynamic";
 
 const defaultTimeoutMs = 12_000;
 const extendedTimeoutMs = 25_000;
-const locationPromptMessage =
-  "Please share your location or enable GPS (e.g., Yangon, Hlaing, Mandalay).";
 const allowRequestCoordsFallback =
   process.env.EXPLICIT_LOCATION_COORDS_FALLBACK !== "false";
 
@@ -127,6 +125,23 @@ const buildPlaceFollowUpMessage = ({
   return `I think you mean ${name}. It stood out as ${highlightText} in your last search. Want more spots like this?${mapLine}`;
 };
 
+const LOCATION_DENYLIST = new Set([
+  "place",
+  "places",
+  "here",
+  "nearby",
+  "around",
+  "my area",
+  "area",
+  "this area",
+]);
+
+const normalizeLocationToken = (value: string) =>
+  value.toLowerCase().replace(/[.,]/g, "").trim();
+
+const isGenericLocation = (value: string) =>
+  LOCATION_DENYLIST.has(normalizeLocationToken(value));
+
 const mapSessionPlaceToRecommendation = (place: SessionPlace) => ({
   placeId: place.placeId,
   name: place.name,
@@ -153,6 +168,86 @@ const toSessionPlaces = (places: RecommendationCardData[]) =>
     mapsUrl: place.mapsUrl,
     types: place.types,
   }));
+
+const sortByRating = (a: SessionPlace, b: SessionPlace) => {
+  const ratingA = a.rating ?? -1;
+  const ratingB = b.rating ?? -1;
+  if (ratingA === ratingB) {
+    return (b.reviews ?? 0) - (a.reviews ?? 0);
+  }
+  return ratingB - ratingA;
+};
+
+const sortByDistance = (a: SessionPlace, b: SessionPlace) => {
+  const distanceA = a.distanceMeters ?? Number.POSITIVE_INFINITY;
+  const distanceB = b.distanceMeters ?? Number.POSITIVE_INFINITY;
+  return distanceA - distanceB;
+};
+
+const sortByReviews = (a: SessionPlace, b: SessionPlace) =>
+  (b.reviews ?? -1) - (a.reviews ?? -1);
+
+const parseListQnaFollowupType = (value?: string | null) => {
+  if (
+    value === "highest_rating" ||
+    value === "closest" ||
+    value === "most_reviews" ||
+    value === "recommend_one" ||
+    value === "top_n" ||
+    value === "compare"
+  ) {
+    return value;
+  }
+  return null;
+};
+
+const selectPlacesForListQna = (
+  places: SessionPlace[],
+  followupType: NonNullable<ReturnType<typeof parseListQnaFollowupType>>,
+  topN?: number | null,
+) => {
+  const sorted = [...places];
+  switch (followupType) {
+    case "closest":
+      sorted.sort(sortByDistance);
+      break;
+    case "most_reviews":
+      sorted.sort(sortByReviews);
+      break;
+    case "highest_rating":
+    case "recommend_one":
+    case "top_n":
+    default:
+      sorted.sort(sortByRating);
+      break;
+  }
+  const count = followupType === "top_n" ? Math.max(topN ?? 3, 1) : 1;
+  return sorted.slice(0, count);
+};
+
+const buildListQnaMessage = (
+  followupType: NonNullable<ReturnType<typeof parseListQnaFollowupType>>,
+  place?: SessionPlace,
+  count?: number,
+) => {
+  if (!place) {
+    return "I couldn't find that in the last results. Want me to search again?";
+  }
+  switch (followupType) {
+    case "closest":
+      return `The closest option from your last results is ${place.name}.`;
+    case "most_reviews":
+      return `The most-reviewed option from your last results is ${place.name}.`;
+    case "highest_rating":
+    case "recommend_one":
+      return `The highest-rated option from your last results is ${place.name}.`;
+    case "top_n":
+      return `Here are the top ${count ?? 3} options from your last results.`;
+    case "compare":
+    default:
+      return `Here are a few options from your last results.`;
+  }
+};
 
 const applyLocalRefine = ({
   message,
@@ -949,6 +1044,7 @@ const buildChatResponse = ({
   suggestedPrompts,
   followups,
   isFollowUp,
+  language,
 }: {
   status: ChatResponse["status"];
   message: string;
@@ -963,6 +1059,7 @@ const buildChatResponse = ({
   suggestedPrompts?: ChatResponse["meta"]["suggestedPrompts"];
   followups?: ChatResponse["meta"]["followups"];
   isFollowUp?: boolean;
+  language?: string;
 }): ChatResponse => ({
   status,
   message: (() => {
@@ -997,6 +1094,7 @@ const buildChatResponse = ({
     sessionId,
     nextPageToken,
     needs_location: needsLocation || undefined,
+    language,
   },
 });
 
@@ -1012,6 +1110,7 @@ const buildAgentResponse = ({
   userMessage,
   locationLabel,
   radiusMeters,
+  language,
 }: {
   agentMessage: string | null | undefined;
   recommendations: RecommendationCardData[];
@@ -1024,6 +1123,7 @@ const buildAgentResponse = ({
   userMessage?: string;
   locationLabel?: string;
   radiusMeters?: number;
+  language?: string;
 }): ChatResponse => {
   const hasRecommendations = recommendations.length > 0;
   const resolvedStatus = normalizeChatStatus(status ?? (hasRecommendations ? "OK" : "NO_RESULTS"));
@@ -1055,6 +1155,7 @@ const buildAgentResponse = ({
     userMessage,
     locationLabel,
     radiusMeters,
+    language,
   });
 };
 
@@ -1183,14 +1284,40 @@ export async function POST(request: Request) {
     return response;
   }
 
-  const intent = detectIntent(body.message);
   const sessionMemory = sessionId ? getSessionMemory(sessionId) : null;
-  const classifiedIntent = await classifyIntent(body.message, sessionMemory);
   const searchSession = await getOrCreateSession({ sessionId, channel });
   const hasPendingRecommend =
     searchSession?.pendingAction === PENDING_ACTION_RECOMMEND;
+  const llmExtract = await extractWithLLM({
+    message: body.message,
+    locale: locale ?? undefined,
+    hasDeviceCoords: Boolean(reqCoords),
+    lastPlacesCount: sessionMemory?.lastPlaces?.length ?? 0,
+  });
+  const responseLanguage = llmExtract.language;
+  const locationPromptMessage = t("NEED_LOCATION", responseLanguage);
+  const cravingPromptMessage = t("ASK_CRAVING", responseLanguage);
+  const usedKeyword =
+    llmExtract.keyword_en?.trim() || llmExtract.keyword?.trim() || null;
+  const usedKeywordEn = Boolean(llmExtract.keyword_en?.trim());
+  const keywordPreview = usedKeyword ? usedKeyword.slice(0, 60) : null;
+
+  logger.info(
+    {
+      requestId,
+      language: llmExtract.language,
+      intent: llmExtract.intent,
+      keywordPreview,
+      location_text: llmExtract.location_text ?? null,
+      confidence: llmExtract.confidence,
+      usedKeywordEn,
+    },
+    "LLM extract",
+  );
+
   const shouldHandleSmallTalk =
-    intent === "SMALL_TALK" && !(hasPendingRecommend && !isSmallTalkMessage(body.message));
+    llmExtract.intent === "smalltalk" &&
+    !(hasPendingRecommend && !isSmallTalkMessage(body.message));
 
   const preferenceUpdate: UserPrefsUpdate | null = extractPreferenceUpdates(body.message);
   if (sessionId && (body.action === "set_pref" || preferenceUpdate)) {
@@ -1199,7 +1326,7 @@ export async function POST(request: Request) {
       preferenceUpdate ?? {},
     );
     updateSessionMemory(sessionId, { userPrefs: nextPrefs });
-    if (body.action === "set_pref" || classifiedIntent.intent === "smalltalk") {
+    if (body.action === "set_pref" || llmExtract.intent === "smalltalk") {
       return respondChat(
         200,
         buildChatResponse({
@@ -1211,6 +1338,7 @@ export async function POST(request: Request) {
           locationLabel: locationText,
           radiusMeters,
           mode: "smalltalk",
+          language: responseLanguage,
         }),
       );
     }
@@ -1233,14 +1361,16 @@ export async function POST(request: Request) {
         locationLabel: locationText,
         radiusMeters,
         mode: "smalltalk",
+        language: responseLanguage,
       }),
     );
   }
 
   const shouldResolvePlace =
-    classifiedIntent.intent === "place_followup" || Boolean(classifiedIntent.extracted.placeName);
+    llmExtract.intent === "place_followup" || Boolean(llmExtract.place_name);
   if (shouldResolvePlace && sessionMemory?.lastPlaces?.length) {
-    const resolved = resolvePlaceReference(body.message, sessionMemory.lastPlaces);
+    const placeQuery = llmExtract.place_name ?? body.message;
+    const resolved = resolvePlaceReference(placeQuery, sessionMemory.lastPlaces);
     if (resolved && resolved.score >= 0.78) {
       const mapsUrl = getPlaceMapsUrl(resolved.place);
       const message = buildPlaceFollowUpMessage({
@@ -1282,12 +1412,52 @@ export async function POST(request: Request) {
           locationLabel: locationText,
           radiusMeters,
           mode: "place_followup",
+          language: responseLanguage,
         }),
       );
     }
   }
 
-  if (classifiedIntent.intent === "refine" && sessionMemory?.lastPlaces?.length) {
+  if (llmExtract.intent === "list_qna" && sessionMemory?.lastPlaces?.length) {
+    const followupType = parseListQnaFollowupType(llmExtract.followup_type);
+    if (followupType) {
+      const selected = selectPlacesForListQna(
+        sessionMemory.lastPlaces,
+        followupType,
+        llmExtract.top_n,
+      );
+      const responsePlaces = addWhyTryLines({
+        places: selected.map(mapSessionPlaceToRecommendation),
+        query: sessionMemory.lastQuery,
+        prefs: sessionMemory.userPrefs,
+      });
+      const message = buildListQnaMessage(
+        followupType,
+        selected[0],
+        selected.length,
+      );
+      if (sessionId) {
+        updateSessionMemory(sessionId, { lastIntent: "place_followup" });
+      }
+      return respondChat(
+        200,
+        buildChatResponse({
+          status: "ok",
+          message,
+          places: responsePlaces,
+          sessionId,
+          userMessage: body.message,
+          locationLabel: locationText,
+          radiusMeters,
+          mode: "place_followup",
+          language: responseLanguage,
+        }),
+      );
+    }
+  }
+
+  if (llmExtract.intent === "refine" && sessionMemory?.lastPlaces?.length) {
+    const classifiedIntent = await classifyIntent(body.message, sessionMemory);
     const refinedPlaces = applyLocalRefine({
       message: body.message,
       places: sessionMemory.lastPlaces,
@@ -1330,6 +1500,7 @@ export async function POST(request: Request) {
           locationLabel: sessionMemory.lastResolvedLocation?.label ?? locationText,
           radiusMeters,
           mode: "refine",
+          language: responseLanguage,
         }),
       );
     }
@@ -1382,6 +1553,7 @@ export async function POST(request: Request) {
           locationLabel: sessionMemory.lastResolvedLocation.label,
           radiusMeters: refinedRadius,
           mode: "refine",
+          language: responseLanguage,
         }),
       );
     }
@@ -1406,6 +1578,7 @@ export async function POST(request: Request) {
           locationLabel: locationText,
           radiusMeters,
           isFollowUp: true,
+          language: responseLanguage,
         }),
       );
     }
@@ -1471,60 +1644,53 @@ export async function POST(request: Request) {
         locationLabel: locationText,
         radiusMeters: followUp.usedRadius ?? storedSession.radius,
         isFollowUp: true,
+        language: responseLanguage,
       }),
     );
   }
 
   const countryHint = request.headers.get("x-country");
-  const parserResult = await parseLocationWithLLM({
-    message: searchMessage,
-    coords,
-    channel,
-    locale,
-    countryHint,
-    lastQuery: searchSession?.lastQuery ?? undefined,
-    lastRadiusM: searchSession?.lastRadiusM ?? undefined,
-    requestId,
-  });
-  const guarded = applyGuardrails(parserResult, {
-    coords,
-    explicitLocationText: requestLocationText,
-    requestId,
-  });
-  const effectiveParse = guarded;
-
-  logger.info(
-    {
-      requestId,
-      query: effectiveParse.query,
-      location_text: effectiveParse.location_text ?? null,
-      use_device_location: effectiveParse.use_device_location,
-      confidence: effectiveParse.confidence,
-    },
-    "Location parser summary",
-  );
 
   const pendingKeyword =
     searchSession?.pendingAction === PENDING_ACTION_RECOMMEND
       ? searchSession.pendingKeyword ?? undefined
       : undefined;
-  const parsedKeyword = effectiveParse.query?.trim();
   const keyword =
-    (parsedKeyword && parsedKeyword.length > 0 ? parsedKeyword : undefined) ??
-    pendingKeyword ??
+    usedKeyword ??
+    (pendingKeyword && pendingKeyword.trim().length > 0 ? pendingKeyword : null) ??
     extractCuisineKeyword(body.message) ??
-    "restaurant";
+    null;
+  if (!keyword) {
+    if (sessionId) {
+      updateSessionMemory(sessionId, { lastIntent: "refine" });
+    }
+    return respondChat(
+      200,
+      buildChatResponse({
+        status: "ok",
+        message: cravingPromptMessage,
+        places: [],
+        sessionId,
+        userMessage: body.message,
+        locationLabel: locationText,
+        radiusMeters,
+        needsLocation: false,
+        language: responseLanguage,
+      }),
+    );
+  }
+
   const parsedRadius =
-    typeof effectiveParse.radius_m === "number" &&
-    Number.isFinite(effectiveParse.radius_m) &&
-    effectiveParse.radius_m > 0
-      ? Math.round(effectiveParse.radius_m)
+    typeof llmExtract.radius_m === "number" &&
+    Number.isFinite(llmExtract.radius_m) &&
+    llmExtract.radius_m > 0
+      ? Math.round(llmExtract.radius_m)
       : radiusMeters;
-  const placeTypes =
-    Array.isArray(effectiveParse.place_types) && effectiveParse.place_types.length > 0
-      ? effectiveParse.place_types
+  const explicitLocationTextCandidate = llmExtract.location_text?.trim();
+  const explicitLocationText =
+    explicitLocationTextCandidate && !isGenericLocation(explicitLocationTextCandidate)
+      ? explicitLocationTextCandidate
       : undefined;
-  const explicitLocationText = effectiveParse.location_text?.trim() || undefined;
   const explicitLocationPresent = Boolean(explicitLocationText);
 
   if (!explicitLocationPresent && !reqCoords) {
@@ -1561,6 +1727,7 @@ export async function POST(request: Request) {
         locationLabel: locationText,
         radiusMeters: parsedRadius,
         needsLocation: true,
+        language: responseLanguage,
       }),
     );
   }
@@ -1571,7 +1738,7 @@ export async function POST(request: Request) {
   let confirmMessage: string | undefined;
   let coordsSource: SearchCoordsSource = "none";
 
-  if (!reqCoords && effectiveParse.location_text) {
+  if (!reqCoords && explicitLocationText) {
     await setPending(sessionId, {
       action: PENDING_ACTION_RECOMMEND,
       keyword,
@@ -1606,18 +1773,19 @@ export async function POST(request: Request) {
       }
       return respondChat(
         200,
-        buildChatResponse({
-          status: "ok",
-          message:
-            "I couldn't find that location. Please provide a more specific location (e.g., 'Thanlyin, Yangon').",
-          places: [],
-          sessionId,
-          userMessage: body.message,
-          locationLabel: locationText,
-          radiusMeters: parsedRadius,
-          needsLocation: true,
-        }),
-      );
+      buildChatResponse({
+        status: "ok",
+        message:
+          "I couldn't find that location. Please provide a more specific location (e.g., 'Thanlyin, Yangon').",
+        places: [],
+        sessionId,
+        userMessage: body.message,
+        locationLabel: locationText,
+        radiusMeters: parsedRadius,
+        needsLocation: true,
+        language: responseLanguage,
+      }),
+    );
     }
   } else {
     searchCoords = resolvedSearchCoords.searchCoords;
@@ -1651,6 +1819,7 @@ export async function POST(request: Request) {
         locationLabel: locationText,
         radiusMeters: parsedRadius,
         needsLocation: true,
+        language: responseLanguage,
       }),
     );
   }
@@ -1693,7 +1862,6 @@ export async function POST(request: Request) {
     requestId,
     locationText: searchLocationText,
     forceNearbySearch: coordsSource === "geocoded_text",
-    placeTypes,
   });
 
   await upsertSearchSession({
@@ -1722,11 +1890,11 @@ export async function POST(request: Request) {
   });
 
   if (sessionId) {
-      updateSessionMemory(sessionId, {
-        lastPlaces: toSessionPlaces(annotatedPlaces),
-        lastQuery: buildFoodSearchQuery(keyword),
-        lastResolvedLocation: {
-          lat: searchCoords.lat,
+    updateSessionMemory(sessionId, {
+      lastPlaces: toSessionPlaces(annotatedPlaces),
+      lastQuery: buildFoodSearchQuery(keyword),
+      lastResolvedLocation: {
+        lat: searchCoords.lat,
         lng: searchCoords.lng,
         label: resolvedLocationLabel ?? searchLocationText ?? locationText ?? "Current location",
       },
@@ -1738,13 +1906,14 @@ export async function POST(request: Request) {
     200,
     buildChatResponse({
       status: "ok",
-          message: confirmMessage ? `${confirmMessage} ${narratedMessage}` : narratedMessage,
-          places: annotatedPlaces,
+      message: confirmMessage ? `${confirmMessage} ${narratedMessage}` : narratedMessage,
+      places: annotatedPlaces,
       sessionId,
       nextPageToken: searchResult.nextPageToken,
       userMessage: body.message,
       locationLabel: resolvedLocationLabel,
       radiusMeters: parsedRadius,
+      language: responseLanguage,
     }),
   );
 
@@ -1812,6 +1981,7 @@ export async function POST(request: Request) {
             userMessage: body.message,
             locationLabel: locationText,
             radiusMeters,
+            language: responseLanguage,
           }),
         );
       }
@@ -1963,6 +2133,7 @@ export async function POST(request: Request) {
             userMessage: body.message,
             locationLabel: locationText,
             radiusMeters,
+            language: responseLanguage,
           }),
         );
       }
@@ -2032,6 +2203,7 @@ export async function POST(request: Request) {
         userMessage: body.message,
         locationLabel: locationText,
         radiusMeters,
+        language: responseLanguage,
       }),
     );
   }
@@ -2173,6 +2345,7 @@ export async function POST(request: Request) {
         userMessage: body.message,
         locationLabel: locationText,
         radiusMeters,
+        language: responseLanguage,
       }),
     );
   } catch (fallbackError) {
@@ -2218,6 +2391,7 @@ export async function POST(request: Request) {
         userMessage: body.message,
         locationLabel: locationText,
         radiusMeters,
+        language: responseLanguage,
       }),
     );
   }
