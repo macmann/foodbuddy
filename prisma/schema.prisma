@@ -25,8 +25,14 @@ enum RecommendationStatus {
   NO_RESULTS
 }
 
+enum PlaceSource {
+  GOOGLE
+  CURATED
+}
+
 model Place {
   placeId            String             @id
+  externalPlaceId    String?            @unique
   name               String
   address            String?
   lat                Float
@@ -36,6 +42,9 @@ model Place {
   priceLevel         Int?
   types              Json?
   mapsUrl            String?
+  source             PlaceSource        @default(GOOGLE)
+  isFeatured         Boolean            @default(false)
+  cuisineTags        String[]           @default([])
   lastFetchedAt      DateTime?
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
@@ -91,6 +100,9 @@ model PlaceAggregate {
   placeId               String   @id
   communityRatingAvg    Float    @default(0)
   communityRatingCount  Int      @default(0)
+  foodbuddyRatingAvg    Float    @default(0)
+  foodbuddyRatingCount  Int      @default(0)
+  feedbackSummary       String?
   tagCounts             Json     @default("{}")
   lastUpdatedAt         DateTime?
   place                 Place    @relation(fields: [placeId], references: [placeId], onDelete: Cascade)
