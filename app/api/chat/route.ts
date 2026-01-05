@@ -52,6 +52,8 @@ import type { SessionPlace } from "../../../lib/chat/sessionMemory";
 import { getSessionMemory, updateSessionMemory } from "../../../lib/chat/sessionMemory";
 import { classifyIntent } from "../../../lib/chat/classifyIntent";
 import { resolvePlaceReference } from "../../../lib/chat/resolvePlaceReference";
+import { mergePrefs } from "../../../lib/chat/prefs";
+import type { UserPrefs, UserPrefsUpdate } from "../../../lib/chat/types";
 import { listMcpTools, mcpCall } from "../../../lib/mcp/client";
 import { resolveMcpPayloadFromResult } from "../../../lib/mcp/resultParser";
 import { resolveMcpTools } from "../../../lib/mcp/toolResolver";
@@ -221,12 +223,12 @@ const getPlaceMapsUrl = (place: { placeId?: string; mapsUrl?: string }) =>
       )}`
     : undefined);
 
-const extractPreferenceUpdates = (message: string) => {
+const extractPreferenceUpdates = (message: string): UserPrefsUpdate | null => {
   const normalized = message.toLowerCase();
   const cuisine: string[] = [];
   const vibe: string[] = [];
   const dietary: string[] = [];
-  let budget: "cheap" | "mid" | "high" | undefined;
+  let budget: string | undefined;
 
   if (/\bspicy\b/.test(normalized)) {
     vibe.push("spicy");
@@ -243,13 +245,13 @@ const extractPreferenceUpdates = (message: string) => {
   if (/\bno pork\b/.test(normalized)) {
     dietary.push("no pork");
   }
-  if (/\bcheap\b|\bbudget\b|\baffordable\b/.test(normalized)) {
+  if (/\b(cheap|budget|low|affordable|inexpensive)\b/.test(normalized)) {
     budget = "cheap";
   }
-  if (/\bmid\b|\bmoderate\b/.test(normalized)) {
+  if (/\b(mid|midrange|moderate|normal|average)\b/.test(normalized)) {
     budget = budget ?? "mid";
   }
-  if (/\bexpensive\b|\bhigh-end\b|\bupscale\b/.test(normalized)) {
+  if (/\b(high|expensive|pricey|premium|luxury|high-end|upscale)\b/.test(normalized)) {
     budget = "high";
   }
 
@@ -268,22 +270,6 @@ const extractPreferenceUpdates = (message: string) => {
   };
 };
 
-const mergePrefs = (
-  existing: { cuisine?: string[]; vibe?: string[]; dietary?: string[]; budget?: string } | undefined,
-  update: { cuisine?: string[]; vibe?: string[]; dietary?: string[]; budget?: string },
-) => {
-  const mergeList = (current?: string[], next?: string[]) => {
-    const merged = new Set([...(current ?? []), ...(next ?? [])]);
-    return merged.size > 0 ? [...merged] : undefined;
-  };
-  return {
-    cuisine: mergeList(existing?.cuisine, update.cuisine),
-    vibe: mergeList(existing?.vibe, update.vibe),
-    dietary: mergeList(existing?.dietary, update.dietary),
-    budget: update.budget ?? existing?.budget,
-  };
-};
-
 const buildPlaceHighlights = ({
   place,
   query,
@@ -291,7 +277,7 @@ const buildPlaceHighlights = ({
 }: {
   place: RecommendationCardData;
   query: string;
-  prefs?: { cuisine?: string[]; vibe?: string[]; dietary?: string[]; budget?: string };
+  prefs?: UserPrefs;
 }) => {
   const normalizedQuery = query.toLowerCase();
   const typeHints = (place.types ?? []).map((type) => type.toLowerCase());
@@ -353,7 +339,7 @@ const addWhyTryLines = ({
 }: {
   places: RecommendationCardData[];
   query: string;
-  prefs?: { cuisine?: string[]; vibe?: string[]; dietary?: string[]; budget?: string };
+  prefs?: UserPrefs;
 }) =>
   places.map((place, index) => {
     if (index > 1) {
@@ -1206,9 +1192,12 @@ export async function POST(request: Request) {
   const shouldHandleSmallTalk =
     intent === "SMALL_TALK" && !(hasPendingRecommend && !isSmallTalkMessage(body.message));
 
-  const preferenceUpdate = extractPreferenceUpdates(body.message);
+  const preferenceUpdate: UserPrefsUpdate | null = extractPreferenceUpdates(body.message);
   if (sessionId && (body.action === "set_pref" || preferenceUpdate)) {
-    const nextPrefs = mergePrefs(sessionMemory?.userPrefs, preferenceUpdate ?? {});
+    const nextPrefs: UserPrefs = mergePrefs(
+      sessionMemory?.userPrefs,
+      preferenceUpdate ?? {},
+    );
     updateSessionMemory(sessionId, { userPrefs: nextPrefs });
     if (body.action === "set_pref" || classifiedIntent.intent === "smalltalk") {
       return respondChat(
