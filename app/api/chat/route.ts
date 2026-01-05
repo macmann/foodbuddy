@@ -97,6 +97,7 @@ type ChatRequestBody = {
   longitude?: number | null;
   radius_m?: number | null;
   locationEnabled?: boolean;
+  hasCoordinates?: boolean;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -106,6 +107,9 @@ const isError = (value: unknown): value is Error => value instanceof Error;
 
 const isAbortError = (error: unknown) =>
   error instanceof Error && error.name === "AbortError";
+
+const isCoordsInMyanmar = (coords: { lat: number; lng: number }) =>
+  coords.lat >= 9 && coords.lat <= 29 && coords.lng >= 92 && coords.lng <= 102;
 
 const sanitizeCoords = (
   coords: { lat: number; lng: number } | null | undefined,
@@ -124,6 +128,32 @@ const sanitizeCoords = (
     return null;
   }
   return coords;
+};
+
+const validateRequestCoords = (
+  coords: { lat: number; lng: number } | null | undefined,
+  {
+    locationEnabled,
+    enforceMyanmarBounds,
+  }: { locationEnabled: boolean; enforceMyanmarBounds: boolean },
+) => {
+  if (!coords) {
+    return { coords: null, valid: false, reason: "missing" };
+  }
+  const { lat, lng } = coords;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return { coords: null, valid: false, reason: "non_finite" };
+  }
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+    return { coords: null, valid: false, reason: "out_of_range" };
+  }
+  if (lat === 0 && lng === 0) {
+    return { coords: null, valid: false, reason: "zero_coords" };
+  }
+  if (locationEnabled && enforceMyanmarBounds && !isCoordsInMyanmar(coords)) {
+    return { coords: null, valid: false, reason: "outside_myanmar_bounds" };
+  }
+  return { coords, valid: true, reason: "ok" };
 };
 
 const buildPlaceFollowUpMessage = ({
@@ -505,6 +535,8 @@ const parseChatRequestBody = (payload: unknown): ChatRequestBody | null => {
     typeof payload.neighborhood === "string" ? payload.neighborhood : undefined;
   const locationEnabled =
     typeof payload.locationEnabled === "boolean" ? payload.locationEnabled : undefined;
+  const hasCoordinates =
+    typeof payload.hasCoordinates === "boolean" ? payload.hasCoordinates : undefined;
   return {
     anonId,
     sessionId,
@@ -517,6 +549,7 @@ const parseChatRequestBody = (payload: unknown): ChatRequestBody | null => {
     longitude,
     radius_m,
     locationEnabled,
+    hasCoordinates,
   };
 };
 
@@ -651,6 +684,17 @@ const CUISINE_KEYWORDS = [
   "dinner",
 ];
 
+const SINGLE_TOKEN_FOOD_TERMS = new Set([
+  "bbq",
+  "hotpot",
+  "noodle",
+  "noodles",
+  "sushi",
+  "ramen",
+  "pizza",
+  "burger",
+]);
+
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const formatCuisineLabel = (keyword: string) => {
@@ -672,6 +716,22 @@ const extractCuisineKeyword = (message: string | null | undefined) => {
   return CUISINE_KEYWORDS.find((keyword) =>
     new RegExp(`\\b${escapeRegExp(keyword)}\\b`, "i").test(normalized),
   );
+};
+
+const extractSingleTokenFoodKeyword = (message: string | null | undefined) => {
+  if (!message) {
+    return undefined;
+  }
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const tokens = trimmed.split(/\s+/);
+  if (tokens.length !== 1) {
+    return undefined;
+  }
+  const normalized = tokens[0].toLowerCase();
+  return SINGLE_TOKEN_FOOD_TERMS.has(normalized) ? trimmed : undefined;
 };
 
 const formatRadiusKm = (radiusMeters: number) => {
@@ -1170,20 +1230,33 @@ export async function POST(request: Request) {
 
   const userIdHash = hashUserId(body.anonId);
   const requestLocationText = body.neighborhood ?? body.locationText;
-  const rawReqCoords = normalizeRequestCoords(rawBody);
-  const reqCoords = sanitizeCoords(rawReqCoords);
+  const locationEnabled =
+    body.hasCoordinates === false ? false : Boolean(body.locationEnabled);
+  const rawReqCoords =
+    body.hasCoordinates === false ? null : normalizeRequestCoords(rawBody);
+  const reqCoordsCheck = validateRequestCoords(rawReqCoords, {
+    locationEnabled,
+    enforceMyanmarBounds: locationEnabled,
+  });
+  const reqCoords = reqCoordsCheck.coords;
   const roundedLat = reqCoords ? Math.round(reqCoords.lat * 1000) / 1000 : undefined;
   const roundedLng = reqCoords ? Math.round(reqCoords.lng * 1000) / 1000 : undefined;
   const geoLocation = normalizeGeoLocation({
-    coordinates: reqCoords ?? body.location,
-    latitude: body.latitude ?? undefined,
-    longitude: body.longitude ?? undefined,
+    coordinates:
+      reqCoords ??
+      (body.hasCoordinates === false ? undefined : body.location),
+    latitude: body.hasCoordinates === false ? undefined : body.latitude ?? undefined,
+    longitude: body.hasCoordinates === false ? undefined : body.longitude ?? undefined,
     locationText: requestLocationText,
   });
   const rawGpsCoords = getLocationCoords(geoLocation);
-  const gpsCoords = sanitizeCoords(rawGpsCoords ?? null);
+  const gpsCoordsCheck = validateRequestCoords(rawGpsCoords ?? null, {
+    locationEnabled,
+    enforceMyanmarBounds: locationEnabled,
+  });
+  const gpsCoords = gpsCoordsCheck.coords;
   const coords = reqCoords ?? gpsCoords ?? null;
-  const hasCoordinates = Boolean(reqCoords);
+  const hasCoordinates = Boolean(coords);
   const locationText = requestLocationText ?? undefined;
   const eventLocation: GeoLocation =
     coords
@@ -1194,7 +1267,6 @@ export async function POST(request: Request) {
       : geoLocation.kind === "text"
         ? geoLocation
         : { kind: "none" };
-  const locationEnabled = Boolean(body.locationEnabled);
   const locale = request.headers.get("accept-language")?.split(",")[0] ?? null;
   const radius_m =
     typeof body.radius_m === "number" && Number.isFinite(body.radius_m) && body.radius_m > 0
@@ -1214,6 +1286,10 @@ export async function POST(request: Request) {
       ...logContext,
       hasCoordinates,
       reqCoordsPresent: Boolean(reqCoords),
+      coordsValid: reqCoordsCheck.valid,
+      coordsInvalidReason: reqCoordsCheck.valid ? undefined : reqCoordsCheck.reason,
+      gpsCoordsValid: gpsCoordsCheck.valid,
+      gpsCoordsInvalidReason: gpsCoordsCheck.valid ? undefined : gpsCoordsCheck.reason,
       latRounded: roundedLat,
       lngRounded: roundedLng,
     },
@@ -1254,7 +1330,7 @@ export async function POST(request: Request) {
   const llmExtract = await extractWithLLM({
     message: body.message,
     locale: locale ?? undefined,
-    hasDeviceCoords: Boolean(reqCoords),
+    hasDeviceCoords: Boolean(coords),
     lastPlacesCount: sessionMemory?.lastPlaces?.length ?? 0,
   });
   const responseLanguage = llmExtract.language;
@@ -1717,9 +1793,11 @@ export async function POST(request: Request) {
     searchSession?.pendingAction === PENDING_ACTION_RECOMMEND
       ? searchSession.pendingKeyword ?? undefined
       : undefined;
+  const singleTokenFoodKeyword = extractSingleTokenFoodKeyword(body.message);
   const keyword =
     usedKeyword ??
     (pendingKeyword && pendingKeyword.trim().length > 0 ? pendingKeyword : null) ??
+    singleTokenFoodKeyword ??
     fallbackKeyword ??
     extractCuisineKeyword(body.message) ??
     null;
@@ -1793,7 +1871,7 @@ export async function POST(request: Request) {
       : undefined;
   const explicitLocationPresent = Boolean(explicitLocationText);
 
-  if (!explicitLocationPresent && !reqCoords) {
+  if (!explicitLocationPresent && !coords) {
     await setPending(sessionId, {
       action: PENDING_ACTION_RECOMMEND,
       keyword,
@@ -1838,7 +1916,7 @@ export async function POST(request: Request) {
   let confirmMessage: string | undefined;
   let coordsSource: SearchCoordsSource = "none";
 
-  if (!reqCoords && explicitLocationText) {
+  if (!coords && explicitLocationText) {
     await setPending(sessionId, {
       action: PENDING_ACTION_RECOMMEND,
       keyword,
@@ -1846,7 +1924,7 @@ export async function POST(request: Request) {
   }
 
   const resolvedSearchCoords = await resolveSearchCoords({
-    reqCoords,
+    reqCoords: coords,
     locationText: explicitLocationText,
     requestId,
     locale,
@@ -1856,12 +1934,12 @@ export async function POST(request: Request) {
   });
 
   if (resolvedSearchCoords.geocodeFailed) {
-    if (reqCoords && allowRequestCoordsFallback) {
+    if (coords && allowRequestCoordsFallback) {
       logger.warn(
         { requestId, keyword },
         "Geocode failed; falling back to request coords",
       );
-      searchCoords = reqCoords;
+      searchCoords = coords;
       coordsSource = "request_coords";
     } else {
       if (sessionId) {
