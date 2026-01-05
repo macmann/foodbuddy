@@ -17,6 +17,8 @@ type ChatMessage = MessageBubbleData & {
   status?: ChatResponse["status"];
   responseError?: boolean;
   suggestedPrompts?: string[];
+  mode?: ChatResponse["meta"]["mode"];
+  highlights?: ChatResponse["meta"]["highlights"];
 };
 
 const isRecommendationCard = (
@@ -42,6 +44,12 @@ const PREF_CHIPS = [
   { label: "Halal", message: "I prefer halal" },
   { label: "Vegetarian", message: "I prefer vegetarian" },
   { label: "Quiet", message: "I like quiet places" },
+];
+const LIST_QNA_CHIPS = [
+  { label: "Closest", message: "Closest" },
+  { label: "Top rated", message: "Top rated" },
+  { label: "Most popular", message: "Most popular" },
+  { label: "Recommend one", message: "Recommend one" },
 ];
 
 const getMapsUrl = (place: RecommendationCardData) => place.mapsUrl ?? undefined;
@@ -314,6 +322,8 @@ export default function HomePageClient() {
         responseError,
         error: normalizedStatus === "error",
         suggestedPrompts: data.meta?.suggestedPrompts,
+        mode: data.meta?.mode,
+        highlights: data.meta?.highlights,
         createdAt: Date.now(),
       };
 
@@ -488,6 +498,25 @@ export default function HomePageClient() {
               return (
                 <div key={message.id} className="space-y-3">
                   <MessageBubble message={message} onRetry={handleRetry}>
+                    {message.mode === "list_qna" &&
+                      message.highlights &&
+                      message.highlights.length > 0 && (
+                        <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Highlights
+                          </p>
+                          <ul className="mt-2 space-y-1">
+                            {message.highlights.map((highlight) => (
+                              <li key={`${message.id}-${highlight.title}-${highlight.details}`}>
+                                <span className="font-semibold text-slate-700">
+                                  {highlight.title}:
+                                </span>{" "}
+                                <span className="text-slate-600">{highlight.details}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                     {visiblePlaces.length > 0 && (
                       <div className="mt-3 grid gap-3">
                         {visiblePlaces.map((place) => (
@@ -506,6 +535,20 @@ export default function HomePageClient() {
                             Show {showMoreCount} more
                           </button>
                         )}
+                      </div>
+                    )}
+                    {message.mode === "list_qna" && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {LIST_QNA_CHIPS.map((chip) => (
+                          <button
+                            key={`${message.id}-${chip.label}`}
+                            type="button"
+                            onClick={() => sendMessage(chip.message)}
+                            className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+                          >
+                            {chip.label}
+                          </button>
+                        ))}
                       </div>
                     )}
                     {chipPlaces && chipPlaces.length > 0 && (

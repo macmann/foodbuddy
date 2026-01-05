@@ -24,7 +24,7 @@ export type SessionMemory = {
   lastQuery: string;
   lastResolvedLocation: SessionLocation;
   userPrefs: UserPrefs;
-  lastIntent: "search" | "refine" | "place_followup" | "smalltalk";
+  lastIntent: "search" | "refine" | "place_followup" | "smalltalk" | "list_qna";
 };
 
 type SessionRecord = {
