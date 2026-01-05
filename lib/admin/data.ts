@@ -2,7 +2,7 @@ import "server-only";
 
 import { prisma } from "../db";
 import { recalculatePlaceAggregate } from "../feedback";
-import { Prisma } from "@prisma/client";
+import { PlaceSource, Prisma } from "@prisma/client";
 import type {
   Channel,
   ModerationStatus,
@@ -173,7 +173,7 @@ export const listQueries = async ({
   pageSize,
 }: QueryFilters) => {
   const createdAt = buildDateRange({ from, to });
-  const where = {
+  const where: Prisma.PlaceWhereInput = {
     ...(channel ? { channel } : {}),
     ...(status ? { status } : {}),
     ...(source ? { source } : {}),
@@ -267,7 +267,11 @@ export const listPlaces = async ({
           ],
         }
       : {}),
-    ...(isCurated === undefined ? {} : { source: isCurated ? "CURATED" : "GOOGLE" }),
+    ...(isCurated === undefined
+      ? {}
+      : {
+          source: isCurated ? PlaceSource.CURATED : PlaceSource.GOOGLE,
+        }),
     ...(isFeatured === undefined ? {} : { isFeatured }),
     ...(minCommunityRating !== undefined
       ? {
