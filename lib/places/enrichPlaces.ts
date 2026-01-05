@@ -6,7 +6,8 @@ import type { RecommendationCardData } from "../types/chat";
 
 type FoodBuddySource = "foodbuddy_curated" | "google_enriched" | "google";
 
-export type EnrichedRecommendation = RecommendationCardData & {
+export type EnrichedRecommendation = Omit<RecommendationCardData, "rating"> & {
+  rating: number | undefined;
   sourceLabel: FoodBuddySource;
   foodbuddyRatingAvg?: number;
   foodbuddyRatingCount?: number;
@@ -43,7 +44,7 @@ const buildCuratedRecommendation = (
   return {
     placeId: place.placeId,
     name: place.name,
-    rating: place.googleRating ?? undefined,
+    rating: undefined,
     reviewCount: place.googleRatingsTotal ?? undefined,
     priceLevel: place.priceLevel ?? undefined,
     lat: place.lat,
@@ -65,6 +66,7 @@ const buildEnrichedRecommendation = (
   const hasFoodbuddyRating = (aggregate?.foodbuddyRatingCount ?? 0) > 0;
   return {
     ...place,
+    rating: place.rating ?? undefined,
     sourceLabel: hasFoodbuddyRating ? "google_enriched" : "google",
     ...aggregatePayload,
   };
