@@ -165,6 +165,8 @@ export const narrateSearchResults = async ({
     "Write a short 2-4 sentence paragraph.",
     "If user prefs exist, mention them gently (e.g., 'Since you like spicy...').",
     "Mention 1-2 highlights (rating, distance, vibe).",
+    "If FoodBuddy community ratings are provided, mention them as local community insights.",
+    "Call out curated FoodBuddy picks when labeled as such.",
     "Ask one follow-up question at the end.",
     "Do not output JSON, lists, or code blocks.",
   ].join("\n");
@@ -172,12 +174,22 @@ export const narrateSearchResults = async ({
   const placeSummaries = topPlaces.slice(0, 3).map((place) => {
     const rating =
       typeof place.rating === "number" ? place.rating.toFixed(1) : "n/a";
+    const foodbuddyRating =
+      typeof place.foodbuddyRatingAvg === "number"
+        ? place.foodbuddyRatingAvg.toFixed(1)
+        : "n/a";
+    const foodbuddyCount =
+      typeof place.foodbuddyRatingCount === "number"
+        ? place.foodbuddyRatingCount
+        : "n/a";
     const distance =
       typeof place.distanceMeters === "number"
         ? Math.round(place.distanceMeters)
         : "n/a";
     const types = place.types?.slice(0, 3).join(", ") ?? "n/a";
-    return `${place.name} | rating: ${rating} | distanceMeters: ${distance} | types: ${types}`;
+    const sourceLabel = place.sourceLabel ?? "google";
+    const summary = place.foodbuddySummary ?? "n/a";
+    return `${place.name} | source: ${sourceLabel} | rating: ${rating} | foodbuddy: ${foodbuddyRating} (${foodbuddyCount}) | summary: ${summary} | distanceMeters: ${distance} | types: ${types}`;
   });
 
   const contentLines = [

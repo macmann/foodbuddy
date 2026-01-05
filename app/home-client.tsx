@@ -388,6 +388,7 @@ export default function HomePageClient() {
 
     try {
       setFeedbackError(null);
+      const selectedPlace = feedbackOptions.find((item) => item.placeId === selectedPlaceId);
 
       const response = await fetch("/api/feedback", {
         method: "POST",
@@ -399,6 +400,20 @@ export default function HomePageClient() {
           rating,
           commentText: commentText.trim() || undefined,
           tags: selectedTags.length > 0 ? selectedTags : undefined,
+          place: selectedPlace
+            ? {
+                placeId: selectedPlace.placeId,
+                name: selectedPlace.name,
+                lat: selectedPlace.lat,
+                lng: selectedPlace.lng,
+                address: selectedPlace.address,
+                mapsUrl: selectedPlace.mapsUrl,
+                priceLevel: selectedPlace.priceLevel,
+                types: selectedPlace.types,
+                rating: selectedPlace.rating,
+                reviewCount: selectedPlace.reviewCount,
+              }
+            : undefined,
         }),
       });
 

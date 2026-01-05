@@ -19,6 +19,7 @@ import {
   isTooVagueForSearch,
 } from "../../../lib/chat/intentHeuristics";
 import { normalizeMcpPlace } from "../../../lib/places/normalizeMcpPlace";
+import { enrichPlaces } from "../../../lib/places/enrichPlaces";
 import {
   buildNearbySearchArgs,
   buildTextSearchArgs,
@@ -1658,8 +1659,15 @@ export async function POST(request: Request) {
         requestId,
         locationText: sessionMemory.lastResolvedLocation.label,
       });
-      const refinedPlaces = addWhyTryLines({
+      const enrichedPlaces = await enrichPlaces({
         places: searchResult.places,
+        origin: {
+          lat: sessionMemory.lastResolvedLocation.lat,
+          lng: sessionMemory.lastResolvedLocation.lng,
+        },
+      });
+      const refinedPlaces = addWhyTryLines({
+        places: enrichedPlaces,
         query: refinedKeyword,
         prefs: sessionMemory.userPrefs,
       });
@@ -1739,20 +1747,24 @@ export async function POST(request: Request) {
       followUp.places.length > 0
         ? "Here are more places you might like."
         : "No more results yet — try a new search.";
+    const enrichedFollowUps = await enrichPlaces({
+      places: followUp.places,
+      origin: { lat: storedSession.lat, lng: storedSession.lng },
+    });
     const followUpMessage = followUp.assistantMessage
       ? safeUserMessage(followUp.assistantMessage, followUpFallbackMessage)
       : await buildNarratedMessage({
           query: storedSession.lastQuery,
           userMessage: body.message,
           locationLabel: locationText,
-          places: followUp.places,
+          places: enrichedFollowUps,
           locale,
           requestId,
           timeoutMs: narrationTimeoutMs,
           fallbackMessage: followUpFallbackMessage,
         });
     const annotatedFollowUps = addWhyTryLines({
-      places: followUp.places,
+      places: enrichedFollowUps,
       query: storedSession.lastQuery,
       prefs: sessionMemory?.userPrefs,
     });
@@ -2063,15 +2075,19 @@ export async function POST(request: Request) {
   });
 
   const sessionPrefs = sessionId ? getSessionMemory(sessionId)?.userPrefs : undefined;
-  const annotatedPlaces = addWhyTryLines({
-    places: searchResult.places,
-    query: keyword,
-    prefs: sessionPrefs,
-  });
-  const narratedMessage = await narrateSearchResults({
-    userMessage: body.message,
-    locationLabel: resolvedLocationLabel ?? searchLocationText ?? locationText,
-    topPlaces: annotatedPlaces.slice(0, 3),
+    const enrichedPlaces = await enrichPlaces({
+      places: searchResult.places,
+      origin: searchCoords,
+    });
+    const annotatedPlaces = addWhyTryLines({
+      places: enrichedPlaces,
+      query: keyword,
+      prefs: sessionPrefs,
+    });
+    const narratedMessage = await narrateSearchResults({
+      userMessage: body.message,
+      locationLabel: resolvedLocationLabel ?? searchLocationText ?? locationText,
+      topPlaces: annotatedPlaces.slice(0, 3),
     userPrefs: sessionPrefs,
     requestId,
     timeoutMs: narrationTimeoutMs,
@@ -2442,6 +2458,10 @@ export async function POST(request: Request) {
       );
     }
     payload = safetyFiltered.kept;
+    payload = await enrichPlaces({
+      places: payload,
+      origin: resolvedCoords,
+    });
     const recommendedPlaceIds = payload.map((item) => item.placeId);
     const resultCount = payload.length;
     const recommendationDebug = recommendation.debug as
