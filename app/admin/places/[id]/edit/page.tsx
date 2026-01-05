@@ -6,10 +6,10 @@ import { getPlaceEditData } from "../../../../../lib/admin/data";
 export default async function EditPlacePage({
   params,
 }: {
-  params: Promise<{ placeId: string }>;
+  params: Promise<{ id: string }>;
 }) {
-  const { placeId } = await params;
-  const place = await getPlaceEditData(placeId);
+  const { id } = await params;
+  const place = await getPlaceEditData(id);
 
   if (!place) {
     return notFound();
