@@ -13,6 +13,11 @@ import { haversineMeters } from "../../../lib/reco/scoring";
 import { getLLMSettings } from "../../../lib/settings/llm";
 import { isAllowedModel } from "../../../lib/agent/model";
 import { isSmallTalkMessage } from "../../../lib/chat/intent";
+import {
+  extractSearchKeywordFallback,
+  isGreeting,
+  isTooVagueForSearch,
+} from "../../../lib/chat/intentHeuristics";
 import { normalizeMcpPlace } from "../../../lib/places/normalizeMcpPlace";
 import {
   buildNearbySearchArgs,
@@ -77,6 +82,7 @@ const defaultTimeoutMs = 12_000;
 const extendedTimeoutMs = 25_000;
 const allowRequestCoordsFallback =
   process.env.EXPLICIT_LOCATION_COORDS_FALLBACK !== "false";
+const LOW_CONFIDENCE_THRESHOLD = 0.45;
 
 
 type ChatRequestBody = {
@@ -100,6 +106,25 @@ const isError = (value: unknown): value is Error => value instanceof Error;
 
 const isAbortError = (error: unknown) =>
   error instanceof Error && error.name === "AbortError";
+
+const sanitizeCoords = (
+  coords: { lat: number; lng: number } | null | undefined,
+): { lat: number; lng: number } | null => {
+  if (!coords) {
+    return null;
+  }
+  const { lat, lng } = coords;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
+  }
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+    return null;
+  }
+  if (lat === 0 && lng === 0) {
+    return null;
+  }
+  return coords;
+};
 
 const buildPlaceFollowUpMessage = ({
   name,
@@ -1145,7 +1170,8 @@ export async function POST(request: Request) {
 
   const userIdHash = hashUserId(body.anonId);
   const requestLocationText = body.neighborhood ?? body.locationText;
-  const reqCoords = normalizeRequestCoords(rawBody);
+  const rawReqCoords = normalizeRequestCoords(rawBody);
+  const reqCoords = sanitizeCoords(rawReqCoords);
   const roundedLat = reqCoords ? Math.round(reqCoords.lat * 1000) / 1000 : undefined;
   const roundedLng = reqCoords ? Math.round(reqCoords.lng * 1000) / 1000 : undefined;
   const geoLocation = normalizeGeoLocation({
@@ -1154,7 +1180,8 @@ export async function POST(request: Request) {
     longitude: body.longitude ?? undefined,
     locationText: requestLocationText,
   });
-  const gpsCoords = getLocationCoords(geoLocation);
+  const rawGpsCoords = getLocationCoords(geoLocation);
+  const gpsCoords = sanitizeCoords(rawGpsCoords ?? null);
   const coords = reqCoords ?? gpsCoords ?? null;
   const hasCoordinates = Boolean(reqCoords);
   const locationText = requestLocationText ?? undefined;
@@ -1251,6 +1278,23 @@ export async function POST(request: Request) {
     "LLM extract",
   );
 
+  const heuristicGreeting = isGreeting(body.message, responseLanguage);
+  const heuristicTooVague = isTooVagueForSearch(body.message);
+  const fallbackKeyword = extractSearchKeywordFallback(body.message);
+  const shouldUseHeuristic =
+    heuristicGreeting || heuristicTooVague || llmExtract.confidence < LOW_CONFIDENCE_THRESHOLD;
+  const intentSource = shouldUseHeuristic ? "heuristic" : "llm";
+
+  logger.info(
+    {
+      ...logContext,
+      intentSource,
+      heuristicGreeting: heuristicGreeting || undefined,
+      heuristicTooVague: heuristicTooVague || undefined,
+    },
+    "Intent resolution",
+  );
+
   const shouldHandleSmallTalk =
     llmExtract.intent === "smalltalk" &&
     !(hasPendingRecommend && !isSmallTalkMessage(body.message));
@@ -1280,12 +1324,20 @@ export async function POST(request: Request) {
     }
   }
 
-  if (shouldHandleSmallTalk) {
-    const smallTalkMessage =
-      "Hi! Tell me what you’re craving, or ask for a cuisine near a place (e.g., 'dim sum near Yangon').";
+  if (heuristicGreeting) {
+    const smallTalkMessage = `Hi! ${cravingPromptMessage}`;
     if (sessionId) {
       updateSessionMemory(sessionId, { lastIntent: "smalltalk" });
     }
+    logger.info(
+      {
+        ...logContext,
+        intentSource,
+        no_mcp_call: true,
+        skipReason: "greeting",
+      },
+      "Skipping MCP search for smalltalk",
+    );
     return respondChat(
       200,
       buildChatResponse({
@@ -1298,10 +1350,75 @@ export async function POST(request: Request) {
         radiusMeters,
         mode: "smalltalk",
         language: responseLanguage,
+        suggestedPrompts: ["hotpot", "noodles", "BBQ"],
+        source: intentSource,
       }),
     );
   }
 
+  if (shouldHandleSmallTalk) {
+    const smallTalkMessage =
+      "Hi! Tell me what you’re craving, or ask for a cuisine near a place (e.g., 'dim sum near Yangon').";
+    if (sessionId) {
+      updateSessionMemory(sessionId, { lastIntent: "smalltalk" });
+    }
+    logger.info(
+      {
+        ...logContext,
+        intentSource,
+        no_mcp_call: true,
+        skipReason: "smalltalk",
+      },
+      "Skipping MCP search for smalltalk",
+    );
+    return respondChat(
+      200,
+      buildChatResponse({
+        status: "ok",
+        message: smallTalkMessage,
+        places: [],
+        sessionId,
+        userMessage: body.message,
+        locationLabel: locationText,
+        radiusMeters,
+        mode: "smalltalk",
+        language: responseLanguage,
+        suggestedPrompts: ["hotpot", "noodles", "BBQ"],
+        source: intentSource,
+      }),
+    );
+  }
+
+  if (heuristicTooVague) {
+    if (sessionId) {
+      updateSessionMemory(sessionId, { lastIntent: "refine" });
+    }
+    logger.info(
+      {
+        ...logContext,
+        intentSource,
+        no_mcp_call: true,
+        skipReason: "vague_keyword",
+      },
+      "Skipping MCP search for vague query",
+    );
+    return respondChat(
+      200,
+      buildChatResponse({
+        status: "ok",
+        message: cravingPromptMessage,
+        places: [],
+        sessionId,
+        userMessage: body.message,
+        locationLabel: locationText,
+        radiusMeters,
+        mode: "refine",
+        language: responseLanguage,
+        suggestedPrompts: ["hotpot", "noodles", "BBQ"],
+        source: intentSource,
+      }),
+    );
+  }
   const shouldResolvePlace =
     llmExtract.intent === "place_followup" || Boolean(llmExtract.place_name);
   if (shouldResolvePlace && sessionMemory?.lastPlaces?.length) {
@@ -1603,6 +1720,7 @@ export async function POST(request: Request) {
   const keyword =
     usedKeyword ??
     (pendingKeyword && pendingKeyword.trim().length > 0 ? pendingKeyword : null) ??
+    fallbackKeyword ??
     extractCuisineKeyword(body.message) ??
     null;
   if (!keyword) {
@@ -1621,6 +1739,43 @@ export async function POST(request: Request) {
         radiusMeters,
         needsLocation: false,
         language: responseLanguage,
+      }),
+    );
+  }
+
+  const keywordMeaningful =
+    keyword.trim().length >= 3 &&
+    !isGreeting(keyword) &&
+    !isTooVagueForSearch(keyword);
+
+  if (!keywordMeaningful) {
+    if (sessionId) {
+      updateSessionMemory(sessionId, { lastIntent: "refine" });
+    }
+    logger.info(
+      {
+        ...logContext,
+        intentSource,
+        no_mcp_call: true,
+        skipReason: "keyword_not_meaningful",
+        keywordPreview: keyword.slice(0, 40),
+      },
+      "Skipping MCP search for non-meaningful keyword",
+    );
+    return respondChat(
+      200,
+      buildChatResponse({
+        status: "ok",
+        message: cravingPromptMessage,
+        places: [],
+        sessionId,
+        userMessage: body.message,
+        locationLabel: locationText,
+        radiusMeters,
+        needsLocation: false,
+        language: responseLanguage,
+        suggestedPrompts: ["hotpot", "noodles", "BBQ"],
+        source: intentSource,
       }),
     );
   }
@@ -1733,8 +1888,18 @@ export async function POST(request: Request) {
     );
     }
   } else {
-    searchCoords = resolvedSearchCoords.searchCoords;
-    coordsSource = resolvedSearchCoords.coordsSource;
+    const sanitized = sanitizeCoords(resolvedSearchCoords.searchCoords);
+    if (!sanitized && resolvedSearchCoords.searchCoords) {
+      logger.warn(
+        {
+          ...logContext,
+          coordsSource: resolvedSearchCoords.coordsSource,
+        },
+        "Ignoring invalid search coords",
+      );
+    }
+    searchCoords = sanitized;
+    coordsSource = sanitized ? resolvedSearchCoords.coordsSource : "none";
     resolvedLocationLabel =
       resolvedSearchCoords.resolvedLocationLabel ?? resolvedLocationLabel;
     searchLocationText = resolvedSearchCoords.searchLocationText ?? searchLocationText;
