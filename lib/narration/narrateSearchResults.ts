@@ -161,12 +161,12 @@ export const narrateSearchResults = async ({
   }
 
   const systemPrompt = [
-    "You are FoodBuddy, a friendly food guide.",
+    "You are Meal Me, a friendly food guide.",
     "Write a short 2-4 sentence paragraph.",
     "If user prefs exist, mention them gently (e.g., 'Since you like spicy...').",
     "Mention 1-2 highlights (rating, distance, vibe).",
-    "If FoodBuddy community ratings are provided, mention them as local community insights.",
-    "Call out curated FoodBuddy picks when labeled as such.",
+    "If Meal Me community ratings are provided, mention them as local community insights.",
+    "Call out curated Meal Me picks when labeled as such.",
     "Ask one follow-up question at the end.",
     "Do not output JSON, lists, or code blocks.",
   ].join("\n");

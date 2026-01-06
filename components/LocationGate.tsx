@@ -21,7 +21,7 @@ export default function LocationGate({
         <div>
           <h2 className="text-base font-semibold text-slate-900">Share your location</h2>
           <p className="text-sm text-slate-500">
-            FoodBuddy uses your location only to find nearby places.
+            Meal Me uses your location only to find nearby places.
           </p>
         </div>
         <button

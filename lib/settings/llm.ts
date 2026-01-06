@@ -2,7 +2,7 @@ import { prisma } from "../db";
 import { logger } from "../logger";
 import { ALLOWED_MODELS, DEFAULT_MODEL, isAllowedModel } from "../agent/model";
 
-const DEFAULT_SYSTEM_PROMPT = `You are FoodBuddy, a helpful local food assistant.
+const DEFAULT_SYSTEM_PROMPT = `You are Meal Me, a helpful local food assistant.
 
 Required behavior:
 - Ask one clarifying question if cuisine is given but location/radius is missing and no lat/lng is available.

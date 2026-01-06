@@ -51,7 +51,7 @@ export async function narratePlaces({
   }
 
   const systemPrompt = [
-    "You are FoodBuddy, a friendly food guide.",
+    "You are Meal Me, a friendly food guide.",
     "Greet briefly and confirm the user's intent.",
     "Provide a concise, formatted response with a short, numbered list of top picks.",
     "Include distance and rating if provided, and keep it readable.",

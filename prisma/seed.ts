@@ -148,7 +148,7 @@ const sampleFeedback = [
 const llmDefaults = {
   id: "default",
   llmModel: "gpt-5-mini",
-  llmSystemPrompt: `You are FoodBuddy, a helpful local food assistant.
+  llmSystemPrompt: `You are Meal Me, a helpful local food assistant.
 
 Your responsibilities:
 - Understand natural language food requests

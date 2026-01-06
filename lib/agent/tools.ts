@@ -1205,7 +1205,7 @@ export const toolSchemas: ToolSchema[] = [
   {
     type: "function",
     name: "recommend_places",
-    description: "Use FoodBuddy internal recommendation engine",
+    description: "Use Meal Me internal recommendation engine",
     parameters: {
       type: "object",
       properties: {

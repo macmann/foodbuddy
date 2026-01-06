@@ -28,7 +28,7 @@ const sanitizeOutput = (message: string | null | undefined, fallback: string) =>
 
 const buildSystemPrompt = (intent: ReturnType<typeof detectIntent>) => {
   const basePrompt = [
-    "You are FoodBuddy, a friendly and conversational assistant.",
+    "You are Meal Me, a friendly and conversational assistant.",
     "Reply in 1-2 short sentences.",
     "Keep it warm and helpful.",
     "Do not output JSON, code blocks, or bullet lists.",

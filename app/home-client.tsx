@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import Composer from "../components/Composer";
@@ -480,9 +481,21 @@ export default function HomePageClient() {
           </div>
         )}
         <header className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 shadow-sm backdrop-blur">
-          <div>
-            <h1 className="text-lg font-bold text-slate-900">FoodBuddy</h1>
-            <p className="text-xs text-slate-500">Smart local food picks in seconds.</p>
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 overflow-hidden rounded-full bg-white shadow-sm">
+              <Image
+                src="/meal-me-logo.svg"
+                alt="Meal Me logo"
+                width={40}
+                height={40}
+                className="h-full w-full object-cover object-top"
+                priority
+              />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold text-slate-900">Meal Me</h1>
+              <p className="text-xs text-slate-500">Smart local food picks in seconds.</p>
+            </div>
           </div>
           <div className="flex items-center gap-2 text-xs">
             <span
