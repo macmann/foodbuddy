@@ -164,7 +164,7 @@ export default function AdminLLMSettingsPage() {
       <div>
         <h2 className="text-2xl font-semibold text-white">LLM Agent</h2>
         <p className="text-sm text-slate-400">
-          Configure the GPT-5 agent that powers FoodBuddy chat responses.
+          Configure the GPT-5 agent that powers Meal Me chat responses.
         </p>
       </div>
 
@@ -276,7 +276,7 @@ export default function AdminLLMSettingsPage() {
 
             {isPromptEmpty ? (
               <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-                System prompt is empty. The default FoodBuddy behavior rules will apply.
+                System prompt is empty. The default Meal Me behavior rules will apply.
               </div>
             ) : null}
 

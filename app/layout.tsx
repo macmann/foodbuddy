@@ -6,8 +6,8 @@ import ClientRoot from "./client-root";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "FoodBuddy",
-  description: "FoodBuddy starter app",
+  title: "Meal Me",
+  description: "Meal Me starter app",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

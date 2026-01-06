@@ -9,7 +9,7 @@ export default function NewPlacePage() {
           <p className="text-xs uppercase tracking-[0.2em] text-slate-500">New place</p>
           <h2 className="text-2xl font-semibold text-white">Create curated place</h2>
           <p className="mt-2 text-sm text-slate-400">
-            Add curated or featured places for FoodBuddy recommendations.
+            Add curated or featured places for Meal Me recommendations.
           </p>
         </div>
         <Link

@@ -36,7 +36,7 @@ export type AgentResult = {
 
 const MAX_TOOL_ROUNDS = 3;
 const MAX_RECOMMENDATIONS = 7;
-const BASE_SYSTEM_PROMPT = `You are FoodBuddy, a helpful local food assistant.
+const BASE_SYSTEM_PROMPT = `You are Meal Me, a helpful local food assistant.
 
 Required behavior:
 - Ask one clarifying question if cuisine is given but location/radius is missing and no lat/lng is available.

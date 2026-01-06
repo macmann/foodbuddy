@@ -80,7 +80,7 @@ const buildCuratedRecommendation = (
     openNow: undefined,
     address: place.address ?? undefined,
     mapsUrl: place.mapsUrl ?? undefined,
-    rationale: "FoodBuddy pick",
+    rationale: "Meal Me pick",
     types: normalizeTags(place.types),
     sourceLabel: "foodbuddy_curated",
     ...buildAggregatePayload(aggregate),

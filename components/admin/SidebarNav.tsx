@@ -39,9 +39,7 @@ export default function SidebarNav({ isOpen, onClose }: SidebarNavProps) {
       >
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-emerald-300">
-              FoodBuddy
-            </p>
+            <p className="text-xs uppercase tracking-[0.3em] text-emerald-300">Meal Me</p>
             <p className="text-lg font-semibold text-white">Admin Console</p>
           </div>
           <button

@@ -129,11 +129,11 @@ export default async function PlaceDetailPage({
           </div>
         </div>
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-          <h3 className="text-sm font-semibold text-slate-200">FoodBuddy aggregates</h3>
+          <h3 className="text-sm font-semibold text-slate-200">Meal Me aggregates</h3>
           <div className="mt-4 space-y-4 text-sm text-slate-300">
             <div>
               <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                FoodBuddy rating avg
+                Meal Me rating avg
               </p>
               <p className="mt-2">
                 {place.aggregate
@@ -143,7 +143,7 @@ export default async function PlaceDetailPage({
             </div>
             <div>
               <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                FoodBuddy rating count
+                Meal Me rating count
               </p>
               <p className="mt-2">
                 {place.aggregate ? place.aggregate.foodbuddyRatingCount : "N/A"}
